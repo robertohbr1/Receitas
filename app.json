@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Caderno Gastronômico",
+    "slug": "caderno-gastronomico",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Permite selecionar fotos de capa e vídeos de preparo das suas receitas."
+      }
+    },
+    "android": {
+      "package": "com.rober.cadernogastronomico",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
+  }
+}
