@@ -110,6 +110,31 @@ export class CulinaryRecipeRepository {
     return remaining;
   }
 
+  /**
+   * Exporta todas as receitas cadastradas em uma string JSON formatada para backup e troca de aparelho.
+   *
+   * @example
+   * const jsonBackup = await repository.exportCatalogBackupJson();
+   */
+  public async exportCatalogBackupJson(): Promise<string> {
+    const existingRecipes = await this.loadAllRecipes();
+    return JSON.stringify(existingRecipes, null, 2);
+  }
+
+  /**
+   * Importa um backup JSON de receitas, mesclando com as existentes sem duplicar IDs.
+   *
+   * @example
+   * const updated = await repository.importCatalogBackupJson(rawBackupJson);
+   */
+  public async importCatalogBackupJson(rawBackupJson: string): Promise<CulinaryRecipeRecord[]> {
+    const importedRecords = parseAndValidateBackupJson(rawBackupJson);
+    const existingRecipes = await this.loadAllRecipes();
+    const mergedList = mergeBackupRecords(existingRecipes, importedRecords);
+    await this.persistRecipeCollection(mergedList);
+    return mergedList;
+  }
+
   private async persistRecipeCollection(
     recipes: readonly CulinaryRecipeRecord[],
   ): Promise<void> {
@@ -179,6 +204,35 @@ function parseStoredRecipesJson(serialized: string): CulinaryRecipeRecord[] {
       `Conteúdo armazenado corrompido: "${serialized.slice(0, 60)}". Esperado: array JSON válido de CulinaryRecipeRecord.`,
     );
   }
+}
+
+function parseAndValidateBackupJson(rawBackupJson: string): CulinaryRecipeRecord[] {
+  const records = parseStoredRecipesJson(rawBackupJson);
+  if (records.length === 0) {
+    throw new Error(
+      `Backup vazio recebido: "${rawBackupJson}". Esperado: array JSON contendo ao menos 1 receita.`,
+    );
+  }
+  for (const item of records) {
+    validateRecipeDraftInput(item);
+  }
+  return records;
+}
+
+function mergeBackupRecords(
+  existing: readonly CulinaryRecipeRecord[],
+  imported: readonly CulinaryRecipeRecord[],
+): CulinaryRecipeRecord[] {
+  const mapById = new Map<string, CulinaryRecipeRecord>();
+  for (const item of imported) {
+    mapById.set(item.id, item);
+  }
+  for (const item of existing) {
+    if (!mapById.has(item.id)) {
+      mapById.set(item.id, item);
+    }
+  }
+  return Array.from(mapById.values());
 }
 
 /**

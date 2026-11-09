@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { BackupTransferModal } from '../components/BackupTransferModal';
 import { CatalogHeaderBar } from '../components/CatalogHeaderBar';
 import { CategoryFilterChips } from '../components/CategoryFilterChips';
 import { RecipeCatalogCard } from '../components/RecipeCatalogCard';
@@ -23,16 +24,19 @@ export interface CatalogScreenProps {
   readonly onOpenRecipeDetail: (recipe: CulinaryRecipeRecord) => void;
   readonly onOpenCreateForm: () => void;
   readonly onToggleRecipeFavorite: (recipeId: string) => void;
+  readonly onGenerateBackupJson?: () => Promise<string>;
+  readonly onRestoreBackupJson?: (rawJson: string) => Promise<number>;
 }
 
 /**
- * Tela principal do catálogo com busca instantânea, filtros por categoria e lista de receitas.
+ * Tela principal do catálogo com busca instantânea, filtros por categoria, backup e lista de receitas.
  *
  * @example
  * <CatalogScreen recipes={filtered} totalRecipesCount={all.length} filterCriteria={criteria} ... />
  */
 export function CatalogScreen(props: CatalogScreenProps): React.ReactElement {
   const { palette, filterCriteria } = props;
+  const [isBackupOpen, setIsBackupOpen] = useState<boolean>(false);
   return (
     <View style={[styles.screen, { backgroundColor: palette.backgroundPrimary }]}>
       <CatalogHeaderBar
@@ -45,6 +49,7 @@ export function CatalogScreen(props: CatalogScreenProps): React.ReactElement {
         onToggleFavoritesFilter={props.onToggleFavoritesOnly}
         onToggleDarkMode={props.onToggleDarkMode}
         onOpenCreateRecipe={props.onOpenCreateForm}
+        onOpenBackupModal={() => setIsBackupOpen(true)}
       />
       <CategoryFilterChips
         palette={palette}
@@ -58,6 +63,15 @@ export function CatalogScreen(props: CatalogScreenProps): React.ReactElement {
         onToggleRecipeFavorite={props.onToggleRecipeFavorite}
         onOpenCreateForm={props.onOpenCreateForm}
       />
+      {props.onGenerateBackupJson && props.onRestoreBackupJson && (
+        <BackupTransferModal
+          visible={isBackupOpen}
+          palette={palette}
+          onClose={() => setIsBackupOpen(false)}
+          onGenerateBackupJson={props.onGenerateBackupJson}
+          onRestoreBackupJson={props.onRestoreBackupJson}
+        />
+      )}
     </View>
   );
 }

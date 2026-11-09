@@ -29,6 +29,8 @@ export interface RecipeCatalogController {
   readonly toggleFavoriteById: (recipeId: string) => Promise<void>;
   readonly saveRecipeDraft: (draft: RecipeDraftInput) => Promise<void>;
   readonly deleteRecipeById: (recipeId: string) => Promise<void>;
+  readonly exportCatalogBackup: () => Promise<string>;
+  readonly importCatalogBackup: (rawBackupJson: string) => Promise<number>;
 }
 
 /**
@@ -73,6 +75,12 @@ export function useRecipeCatalogController(
     saveRecipeDraft: (draft) =>
       executeSaveDraft(repository, activeView, draft, setAllRecipes, setActiveView),
     deleteRecipeById: (id) => executeDeleteRecipe(repository, id, setAllRecipes, setActiveView),
+    exportCatalogBackup: () => repository.exportCatalogBackupJson(),
+    importCatalogBackup: async (rawBackupJson) => {
+      const merged = await repository.importCatalogBackupJson(rawBackupJson);
+      setAllRecipes(merged);
+      return merged.length;
+    },
   };
 }
 
