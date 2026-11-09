@@ -72,4 +72,18 @@ describe('CulinaryRecipeRepository', () => {
     expect(byIngredient).toHaveLength(1);
     expect(matchesRecipeSearchQuery(byIngredient[0], 'arbóreo')).toBe(true);
   });
+
+  it('exporta o catálogo em JSON de backup e importa em outro dispositivo sem duplicar IDs', async () => {
+    const sourceStorage = new InMemoryStorageGateway();
+    const sourceRepo = new CulinaryRecipeRepository(sourceStorage);
+    await sourceRepo.createRecipe(createSampleValidDraft(), 'backup-nhoque-99');
+
+    const backupJson = await sourceRepo.exportCatalogBackupJson();
+    expect(backupJson).toContain('backup-nhoque-99');
+
+    const targetStorage = new InMemoryStorageGateway();
+    const targetRepo = new CulinaryRecipeRepository(targetStorage);
+    const merged = await targetRepo.importCatalogBackupJson(backupJson);
+    expect(merged.some((r) => r.id === 'backup-nhoque-99')).toBe(true);
+  });
 });
