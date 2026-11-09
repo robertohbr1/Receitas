@@ -12,16 +12,16 @@ Aplicativo multiplataforma (**React Native + Expo 52 + TypeScript**) para organi
 - **Busca Instantânea Multimodal**: Pesquisa em tempo real por **título**, **ingredientes** ou **tags**.
 - **Filtros Rápidos**: Chips de categorias (`Todas`, `Sobremesas`, `Massas`, `Carnes`, `Rápidas`, `Saudáveis`, `Lanches`, `Bebidas`) e filtro exclusivo de **Favoritas** (`❤️`).
 
-### 🔗 Importação Automática por Link (YouTube & Instagram Reels)
+### 🔗 Importação Automática por Link (YouTube, Instagram Reels & Receitas Globo)
 - **Criação em 1 Clique (`🚀 Criar Receita Direto`) ou Auto-Preenchimento (`⚡ Preencher Campos`)**:
-  - Basta colar um link do **YouTube** (`watch?v=`, `youtu.be/`, `shorts/`) ou **Instagram** (`reel/`, `p/`).
-  - Extrai automaticamente **título**, **foto de capa (thumbnail)**, **canal/autor**, **lista de ingredientes**, **modo de preparo**, **tempo estimado**, **rendimento** e **categoria culinária sugerida**.
+  - Basta colar um link do **YouTube** (`watch?v=`, `youtu.be/`, `shorts/`), **Instagram** (`reel/`, `p/`) ou **Receitas Globo** (`receitas.globo.com/.../*.ghtml`).
+  - Extrai automaticamente **título**, **foto de capa (thumbnail)**, **vídeo do Globoplay**, **canal/autor/programa**, **lista de ingredientes agrupados por etapa** (ex.: *Alcatra em tiras*, *Molho de queijo*, *Batata assada*), **modo de preparo estruturado**, **tempo estimado**, **rendimento** e **categoria culinária sugerida**.
   - **Filtro Anti-Ruído**: Remove automaticamente chamadas promocionais (*"inscreva-se"*, *"deixe seu like"*, *"comente EU QUERO"*, *"link na bio"*) e hashtags poluídas das descrições e legendas.
-  - **Suporte Web & Mobile**: Conta com middleware de proxy embutido no Metro Bundler ([`metro.config.js`](./metro.config.js)) e múltiplos fallbacks públicos (`allorigins`, `noembed`, metatags OpenGraph/Embed) para contornar restrições de CORS no navegador.
+  - **Suporte Web & Mobile**: Conta com middleware de proxy embutido no Metro Bundler ([`metro.config.js`](file:///c:/Projetos/Receitas/metro.config.js)) e múltiplos fallbacks públicos (`allorigins`, `noembed`, metatags OpenGraph/Embed e microdados `schema.org/Recipe`) para contornar restrições de CORS no navegador.
 
 ### ✨ Importação Inteligente de Texto Colado
 - Cole qualquer texto livre (legendas do TikTok/Instagram, mensagens do WhatsApp ou receitas copiadas de blogs) no **Smart Import Modal**.
-- O parser heurístico ([`recipeTextParser.ts`](./src/services/recipeTextParser.ts)) identifica cabeçalhos, quantidades, medidas culinárias e verbos de ação para separar automaticamente **Título**, **Ingredientes**, **Modo de Preparo**, **Tempo**, **Porções** e **Notas/Calorias**.
+- O parser heurístico ([`recipeTextParser.ts`](file:///c:/Projetos/Receitas/src/services/recipeTextParser.ts)) identifica cabeçalhos, quantidades, medidas culinárias e verbos de ação para separar automaticamente **Título**, **Ingredientes**, **Modo de Preparo**, **Tempo**, **Porções** e **Notas/Calorias**.
 
 ### 🎬 Player de Vídeo Híbrido
 - **Player Embutido na Tela (Web)**: Reproduz vídeos do **YouTube / Shorts** e **Instagram Reels** diretamente dentro da tela da receita via `iframe`, ajustando automaticamente a proporção vertical (`9:16` para Shorts/Reels) ou horizontal (`16:9`), com botão para alternar entre player e foto de capa.
@@ -29,11 +29,11 @@ Aplicativo multiplataforma (**React Native + Expo 52 + TypeScript**) para organi
 - **Abertura Externa Rápida**: Botão dedicado para abrir o vídeo diretamente no aplicativo nativo do YouTube, Instagram ou TikTok.
 
 ### 👨‍🍳 Modo Cozinha Interativo
-- **Escalonador Proporcional de Porções** ([`portionScaler.ts`](./src/services/portionScaler.ts)):
+- **Escalonador Proporcional de Porções** ([`portionScaler.ts`](file:///c:/Projetos/Receitas/src/services/portionScaler.ts)):
   - Aumente ou diminua o número de porções (`-` / `+`) na tela da receita e veja todas as quantidades numéricas e fracionárias (`1/2`, `2,5`, `300g`, etc.) serem recalculadas proporcionalmente em tempo real.
 - **Checklist de Bancada (*Mise en Place*)**: Marque os ingredientes já separados na bancada.
 - **Acompanhamento de Etapas**: Marque cada passo do modo de preparo conforme avança na receita.
-- **Cronômetro Regressivo Inteligente** ([`cookingTimerEngine.ts`](./src/services/cookingTimerEngine.ts)):
+- **Cronômetro Regressivo Inteligente** ([`cookingTimerEngine.ts`](file:///c:/Projetos/Receitas/src/services/cookingTimerEngine.ts)):
   - **Detecção Automática de Tempo**: Identifica menções de horas, minutos e segundos no texto de cada passo (ex.: *"Asse em forno a 180°C por 40 minutos"*) e exibe um botão `⏱️ Iniciar 40:00` diretamente na etapa.
   - **Barra Flutuante de Timer**: Controles de **Play/Pause**, **+1 min**, **Zerar** e atalhos rápidos (`1m`, `5m`, `10m`, `15m`).
 
@@ -92,6 +92,7 @@ Receitas/
 │   │   ├── portionScaler.ts                 # Escalonamento matemático de quantidades e frações
 │   │   ├── recipeFormatter.ts               # Formatação de receitas para texto puro e HTML/PDF
 │   │   ├── recipeTextParser.ts              # Parser heurístico de receitas em texto livre
+│   │   ├── recipeWebsiteParser.ts           # Extração de ingredientes e passos do portal Receitas Globo
 │   │   ├── videoUrlClassifier.ts            # Identificação de provedor, embed URL e dimensões de vídeo
 │   │   └── youtubeDescriptionParser.ts      # Extração de metadados e receitas de páginas do YouTube
 │   ├── theme/
@@ -107,6 +108,7 @@ Receitas/
     ├── portionScaler.test.ts
     ├── recipeFormatterAndTheme.test.ts
     ├── recipeTextParser.test.ts
+    ├── recipeWebsiteParser.test.ts
     ├── videoUrlClassifier.test.ts
     └── youtubeDescriptionParser.test.ts
 ```
@@ -116,7 +118,7 @@ Receitas/
 ## 🚀 Como Executar o Projeto
 
 ### Opção 1: Inicialização Rápida no Windows (PowerShell)
-Execute o script [`Exec.ps1`](./Exec.ps1), que instala as dependências (caso necessário), inicia o servidor Metro na porta `8081` e abre automaticamente uma única aba no navegador assim que o bundle estiver pronto:
+Execute o script [`Exec.ps1`](file:///c:/Projetos/Receitas/Exec.ps1), que instala as dependências (caso necessário), inicia o servidor Metro na porta `8081` e abre automaticamente uma única aba no navegador assim que o bundle estiver pronto:
 
 ```powershell
 .\Exec.ps1
@@ -143,7 +145,7 @@ Execute o script [`Exec.ps1`](./Exec.ps1), que instala as dependências (caso ne
 
 ## 📦 Gerando APK para Android (EAS Build)
 
-O arquivo [`eas.json`](./eas.json) já está configurado com os perfis `preview` (gera arquivo instalável `.apk`) e `production` (`.aab` para Google Play):
+O arquivo [`eas.json`](file:///c:/Projetos/Receitas/eas.json) já está configurado com os perfis `preview` (gera arquivo instalável `.apk`) e `production` (`.aab` para Google Play):
 
 ```bash
 npx eas-cli build --platform android --profile preview
