@@ -15,6 +15,9 @@ config.server = {
       if (req.url.startsWith('/api/instagram-post')) {
         return handleInstagramPostProxy(req, res);
       }
+      if (req.url.startsWith('/api/recipe-webpage')) {
+        return handleRecipeWebpageProxy(req, res);
+      }
       return metroMiddleware(req, res, next);
     };
   },
@@ -85,6 +88,29 @@ function sendPlainTextResponse(res, statusCode, body) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.statusCode = statusCode;
   res.end(body);
+}
+
+async function handleRecipeWebpageProxy(req, res) {
+  const parsedUrl = new URL(req.url, 'http://localhost');
+  const targetUrl = parsedUrl.searchParams.get('url') || '';
+  if (!/^https?:\/\/([a-z0-9-]+\.)*globo\.com\//i.test(targetUrl)) {
+    res.statusCode = 400;
+    res.end('Unsupported recipe website domain');
+    return;
+  }
+  try {
+    const pageResp = await fetch(targetUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
+      },
+    });
+    const html = await pageResp.text();
+    sendPlainTextResponse(res, 200, html);
+  } catch (err) {
+    sendPlainTextResponse(res, 502, String(err));
+  }
 }
 
 module.exports = config;

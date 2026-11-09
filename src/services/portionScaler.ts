@@ -1,4 +1,4 @@
-const LEADING_QUANTITY_PATTERN = /^(\s*)(\d+\/\d+|\d+(?:[.,]\d+)?)(\b|\s*)(.*)$/;
+const LEADING_QUANTITY_PATTERN = /^(\s*)(\d+\/\d+|\d+(?:[.,]\d+)?|meia|meio)(\b|\s*)(.*)$/i;
 
 /**
  * Escalona proporcionalmente a quantidade numérica inicial de uma linha de ingrediente.
@@ -58,6 +58,9 @@ export function scaleIngredientsList(
  * // val === 0.5
  */
 export function parseQuantityToken(rawToken: string): number | null {
+  if (/^mei[ao]$/i.test(rawToken.trim())) {
+    return 0.5;
+  }
   if (rawToken.includes('/')) {
     const [numStr, denStr] = rawToken.split('/');
     const numerator = Number(numStr);

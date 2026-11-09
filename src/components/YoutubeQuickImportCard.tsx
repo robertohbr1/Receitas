@@ -44,16 +44,16 @@ export function YoutubeQuickImportCard(
       ]}
     >
       <Text style={[styles.title, { color: palette.accentTerracotta }]}>
-        🎬 Importar por Link (YouTube ou Instagram Reel)
+        🎬 Importar por Link (YouTube, Instagram ou Receitas Globo)
       </Text>
       <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
-        Cole o link do vídeo ou Reel abaixo: extraímos título, foto de capa, ingredientes e preparo
-        da descrição/legenda automaticamente!
+        Cole o link do vídeo, Reel ou site Receitas Globo abaixo: extraímos título, foto de capa,
+        ingredientes e modo de preparo automaticamente!
       </Text>
       <TextInput
         value={youtubeLink}
         onChangeText={handleLinkInput}
-        placeholder="Cole: https://youtube.com/... ou https://instagram.com/reel/..."
+        placeholder="Cole: youtube.com/..., instagram.com/reel/... ou receitas.globo.com/..."
         placeholderTextColor={palette.textSecondary}
         autoCapitalize="none"
         style={[

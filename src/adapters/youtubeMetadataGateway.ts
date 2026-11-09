@@ -9,6 +9,11 @@ import {
   isStandaloneInstagramUrl,
 } from '../services/instagramCaptionParser';
 import {
+  buildRecipeDraftFromWebsiteMetadata,
+  extractRecipeWebsiteMetadataFromHtml,
+  isStandaloneRecipeWebsiteUrl,
+} from '../services/recipeWebsiteParser';
+import {
   buildRecipeDraftFromYoutubeMetadata,
   extractYoutubeMetadataFromWatchHtml,
   isStandaloneYoutubeUrl,
@@ -17,7 +22,7 @@ import {
 import { RecipeDraftInput } from '../types/recipeTypes';
 
 /**
- * Interface proprietária para buscar receitas do YouTube e do Instagram por link.
+ * Interface proprietária para buscar receitas do YouTube, Instagram e sites culinários por link.
  */
 export interface YoutubeVideoMetadataGateway {
   fetchVideoMetadataByUrl(youtubeUrl: string): Promise<YoutubeRemoteVideoMetadata>;
@@ -25,14 +30,18 @@ export interface YoutubeVideoMetadataGateway {
 }
 
 /**
- * Verifica se a URL informada é um link isolado suportado para importação automática (YouTube ou Instagram).
+ * Verifica se a URL informada é um link isolado suportado para importação automática (YouTube, Instagram ou Receitas Globo).
  *
  * @example
  * const supported = isStandaloneSupportedVideoUrl('https://www.instagram.com/reel/C8abc123/');
  * // supported === true
  */
 export function isStandaloneSupportedVideoUrl(rawInput: string): boolean {
-  return isStandaloneYoutubeUrl(rawInput) || isStandaloneInstagramUrl(rawInput);
+  return (
+    isStandaloneYoutubeUrl(rawInput) ||
+    isStandaloneInstagramUrl(rawInput) ||
+    isStandaloneRecipeWebsiteUrl(rawInput)
+  );
 }
 
 /**
@@ -79,7 +88,7 @@ export class PublicWebYoutubeMetadataGateway implements YoutubeVideoMetadataGate
   }
 
   /**
-   * Detecta automaticamente se o link é do YouTube ou Instagram e retorna o rascunho completo da receita.
+   * Detecta automaticamente se o link é do YouTube, Instagram ou site de receitas e retorna o rascunho completo.
    *
    * @example
    * const draft = await gateway.fetchSocialRecipeDraftByUrl('https://www.instagram.com/reel/C8abc123/');
@@ -90,9 +99,29 @@ export class PublicWebYoutubeMetadataGateway implements YoutubeVideoMetadataGate
       const instaMeta = await fetchInstagramMetadataWithFallbacks(instagramCode);
       return buildRecipeDraftFromInstagramMetadata(instaMeta);
     }
+    if (isStandaloneRecipeWebsiteUrl(socialUrl)) {
+      const siteHtml = await fetchWebsiteHtmlWithFallbacks(socialUrl.trim());
+      const siteMeta = extractRecipeWebsiteMetadataFromHtml(socialUrl, siteHtml);
+      return buildRecipeDraftFromWebsiteMetadata(siteMeta);
+    }
     const youtubeMeta = await this.fetchVideoMetadataByUrl(socialUrl);
     return buildRecipeDraftFromYoutubeMetadata(youtubeMeta);
   }
+}
+
+async function fetchWebsiteHtmlWithFallbacks(targetUrl: string): Promise<string> {
+  const endpoints = [
+    `/api/recipe-webpage?url=${encodeURIComponent(targetUrl)}`,
+    targetUrl,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+  ];
+  for (const endpoint of endpoints) {
+    const html = await tryFetchTextFromEndpoint(endpoint);
+    if (html && (html.includes('recipeIngredient') || html.includes('og:title'))) {
+      return html;
+    }
+  }
+  return tryFetchAllOriginsJsonWrapper(targetUrl);
 }
 
 async function fetchYoutubeWatchHtmlWithFallbacks(videoId: string): Promise<string> {

@@ -16,7 +16,7 @@ import {
 } from '../src/theme/gastronomicTheme';
 
 describe('recipeFormatter & gastronomicTheme', () => {
-  const sampleRecipe = INITIAL_SEED_RECIPES[0];
+  const sampleRecipe = INITIAL_SEED_RECIPES[1];
 
   it('formata a receita em texto amigável para compartilhamento com vídeo e notas', () => {
     const sharedText = formatRecipeAsShareableText(sampleRecipe);

@@ -109,18 +109,18 @@ function ImportModalCard(props: {
   return (
     <View style={[styles.modalCard, { backgroundColor: palette.backgroundCard }]}>
       <Text style={[styles.title, { color: palette.textPrimary }]}>
-        ✨ Importar Link (YouTube/Instagram) ou Texto
+        ✨ Importar Link (YouTube, Instagram, Receitas Globo) ou Texto
       </Text>
       <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
-        Cole um link do YouTube, Reel do Instagram ou o texto completo da receita: vamos extrair
-        título, foto, ingredientes e modo de preparo automaticamente!
+        Cole um link do YouTube, Reel do Instagram, Receitas Globo ou o texto completo da receita:
+        vamos extrair título, foto, ingredientes e modo de preparo automaticamente!
       </Text>
       <TextInput
         multiline
         value={props.pastedText}
         onChangeText={props.onChangeText}
         placeholder={
-          'Cole o link do YouTube ou Instagram Reel:\nhttps://www.instagram.com/reel/...\n\nOu cole os ingredientes e modo de preparo.'
+          'Cole o link (YouTube, Instagram ou Receitas Globo):\nhttps://receitas.globo.com/...\n\nOu cole os ingredientes e modo de preparo.'
         }
         placeholderTextColor={palette.textSecondary}
         style={[

@@ -7,6 +7,20 @@ const YOUTUBE_ID_PATTERNS: readonly RegExp[] = [
 const INSTAGRAM_SHORTCODE_PATTERN =
   /instagram\.com\/(?:[\w.]+\/)?(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i;
 
+const GLOBOPLAY_VIDEO_ID_PATTERN = /globoplay\.globo\.com\/v\/(\d+)/i;
+
+/**
+ * Extrai o ID numérico de um vídeo do Globoplay (Receitas Globo), se presente.
+ *
+ * @example
+ * const id = extractGloboplayVideoId('https://globoplay.globo.com/v/15168194/');
+ * // id === '15168194'
+ */
+export function extractGloboplayVideoId(rawUri: string): string | null {
+  const match = rawUri.trim().match(GLOBOPLAY_VIDEO_ID_PATTERN);
+  return match && match[1] ? match[1] : null;
+}
+
 /**
  * Extrai o identificador de 11 caracteres de uma URL do YouTube, se presente.
  *
@@ -78,12 +92,22 @@ export function classifyRecipeVideoUri(rawUri: string): RecipeVideoDescriptor {
   const providerKind = detectVideoProviderKind(cleanedUri);
   const youtubeId = extractYoutubeVideoId(cleanedUri);
   const instagramCode = extractInstagramShortcode(cleanedUri);
+  const globoId = extractGloboplayVideoId(cleanedUri);
   return {
     rawUri: cleanedUri,
     providerKind,
     embedUri: resolveVideoEmbedUri(youtubeId, instagramCode),
-    thumbnailUri: youtubeId ? `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg` : null,
+    thumbnailUri: resolveVideoThumbnailUri(youtubeId, globoId),
   };
+}
+
+function resolveVideoThumbnailUri(
+  youtubeId: string | null,
+  globoId: string | null,
+): string | null {
+  if (youtubeId) return `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`;
+  if (globoId) return `https://s03.video.glbimg.com/x720/${globoId}.jpg`;
+  return null;
 }
 
 function resolveVideoEmbedUri(
