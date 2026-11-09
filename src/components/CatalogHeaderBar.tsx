@@ -12,10 +12,11 @@ export interface CatalogHeaderBarProps {
   readonly onToggleFavoritesFilter: () => void;
   readonly onToggleDarkMode: () => void;
   readonly onOpenCreateRecipe: () => void;
+  readonly onOpenBackupModal?: () => void;
 }
 
 /**
- * Cabeçalho principal do catálogo com busca por nome/ingrediente, filtro de favoritas e alternador de tema.
+ * Cabeçalho principal do catálogo com busca por nome/ingrediente, filtro de favoritas, backup e alternador de tema.
  *
  * @example
  * <CatalogHeaderBar palette={palette} isDarkMode={false} totalRecipesCount={5} ... />
@@ -30,6 +31,7 @@ export function CatalogHeaderBar(props: CatalogHeaderBarProps): React.ReactEleme
         totalRecipesCount={props.totalRecipesCount}
         onToggleDarkMode={props.onToggleDarkMode}
         onOpenCreateRecipe={props.onOpenCreateRecipe}
+        onOpenBackupModal={props.onOpenBackupModal}
       />
       <SearchAndFavoriteRow
         palette={palette}
@@ -48,6 +50,7 @@ function HeaderTitleRow(props: {
   readonly totalRecipesCount: number;
   readonly onToggleDarkMode: () => void;
   readonly onOpenCreateRecipe: () => void;
+  readonly onOpenBackupModal?: () => void;
 }): React.ReactElement {
   const { palette } = props;
   return (
@@ -61,6 +64,14 @@ function HeaderTitleRow(props: {
         </Text>
       </View>
       <View style={styles.actionsRow}>
+        {props.onOpenBackupModal && (
+          <TouchableOpacity
+            onPress={props.onOpenBackupModal}
+            style={[styles.themeButton, { backgroundColor: palette.backgroundElevated }]}
+          >
+            <Text style={[styles.backupBtnText, { color: palette.textPrimary }]}>🔄 Backup</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           onPress={props.onToggleDarkMode}
           style={[styles.themeButton, { backgroundColor: palette.backgroundElevated }]}
@@ -127,6 +138,7 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 13, marginTop: 2 },
   actionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   themeButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10 },
+  backupBtnText: { fontSize: 12, fontWeight: '700' },
   themeIcon: { fontSize: 16 },
   newRecipeButton: { paddingVertical: 9, paddingHorizontal: 14, borderRadius: 10 },
   newRecipeButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
