@@ -136,6 +136,8 @@ function CatalogViewConnector(props: {
       onOpenRecipeDetail={(rec) => controller.setActiveView({ kind: 'detail', recipeId: rec.id })}
       onOpenCreateForm={() => controller.setActiveView({ kind: 'form', editingRecipe: null })}
       onToggleRecipeFavorite={(id) => void controller.toggleFavoriteById(id)}
+      onGenerateBackupJson={controller.exportCatalogBackup}
+      onRestoreBackupJson={controller.importCatalogBackup}
     />
   );
 }

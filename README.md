@@ -40,9 +40,12 @@ Aplicativo multiplataforma (**React Native + Expo 52 + TypeScript**) para organi
 ### 📝 Campo Único Flexível (Notas do Chef & Nutrição)
 - Campo consolidado para registrar **Dicas do Chef**, **Segredos de Família**, **Substituições** e **Informações Nutricionais / Calorias por porção**.
 
-### 📤 Exportação em PDF e Compartilhamento
+### 📤 Exportação em PDF, Compartilhamento e Backup Completo (.JSON)
 - **Compartilhar Texto**: Formata a receita completa com emojis e seções organizadas para envio rápido no WhatsApp, Telegram ou e-mail.
 - **Gerar PDF Estilizado**: Gera um documento PDF diagramado em estilo editorial gastronômico (`expo-print`) pronto para impressão ou compartilhamento (`expo-sharing`).
+- **Backup e Troca de Aparelho (`🔄 Backup`)**:
+  - Exporta todo o catálogo local em um arquivo `caderno-gastronomico-backup.json` (`expo-file-system` + `expo-sharing`) e abre o **Menu de Compartilhamento** (Download `.JSON`, Copiar JSON, WhatsApp, E-mail e Outros Apps no Android).
+  - Permite restaurar/mesclar receitas em um novo celular ou PC sem duplicar registros existentes.
 
 ### 🎨 Tema Quente & Gastronômico + Modo Escuro
 - Paleta inspirada em cadernos culinários artesanais (tons **Terracota**, **Creme**, **Laranja Suave** e **Verde Sálvia**) com alternância instantânea entre **Modo Claro (`☀️`)** e **Modo Escuro (`🌙`)**.
@@ -57,16 +60,18 @@ O projeto segue princípios de **Clean Architecture**, **Responsabilidade Única
 Receitas/
 ├── App.tsx                                  # Composição raiz e injeção de dependências
 ├── Exec.ps1                                 # Script PowerShell para inicialização rápida na Web
-├── metro.config.js                          # Proxy local para extração YouTube/Instagram sem bloqueio CORS
+├── Atua.ps1                                 # Script PowerShell para atualizar o APK Android e exibir QR Code
+├── metro.config.js                          # Proxy local para extração YouTube/Instagram/Globo sem bloqueio CORS
 ├── eas.json                                 # Perfis de build Android (APK de preview e AAB de produção)
 ├── src/
 │   ├── adapters/                            # Gateways para APIs externas e recursos nativos
 │   │   ├── mediaPickerGateway.ts            # Seleção de fotos e vídeos da galeria (expo-image-picker)
 │   │   ├── recipeShareGateway.ts            # Compartilhamento de texto e geração de PDF (expo-print/sharing)
 │   │   ├── storageGateway.ts                # Persistência chave-valor (AsyncStorage)
-│   │   └── youtubeMetadataGateway.ts        # Extração remota de receitas do YouTube e Instagram
+│   │   └── youtubeMetadataGateway.ts        # Extração remota de receitas do YouTube, Instagram e Receitas Globo
 │   ├── components/                          # Componentes visuais focados e desacoplados
-│   │   ├── CatalogHeaderBar.tsx             # Cabeçalho, barra de busca e filtros rápidos
+│   │   ├── BackupTransferModal.tsx          # Modal de exportação/restauração de backup (.JSON) e menu de compartilhamento
+│   │   ├── CatalogHeaderBar.tsx             # Cabeçalho, barra de busca, botão de backup e filtros rápidos
 │   │   ├── CategoryFilterChips.tsx          # Seletor horizontal de categorias gastronômicas
 │   │   ├── CookingStepsWithTimerSection.tsx # Lista de passos com gatilho automático de cronômetro
 │   │   ├── FloatingCookingTimerBar.tsx      # Painel de controle do cronômetro regressivo
@@ -143,13 +148,23 @@ Execute o script [`Exec.ps1`](file:///c:/Projetos/Receitas/Exec.ps1), que instal
 
 ---
 
-## 📦 Gerando APK para Android (EAS Build)
+## 📦 Gerando e Atualizando o APK para Android (EAS Build)
 
-O arquivo [`eas.json`](file:///c:/Projetos/Receitas/eas.json) já está configurado com os perfis `preview` (gera arquivo instalável `.apk`) e `production` (`.aab` para Google Play):
+O arquivo [`eas.json`](file:///c:/Projetos/Receitas/eas.json) já está configurado com os perfis `preview` (gera arquivo instalável `.apk`) e `production` (`.aab` para Google Play).
+
+Para validar o código TypeScript, compilar uma nova versão do `.apk` e gerar o **QR Code de instalação** automaticamente, execute:
+
+```powershell
+.\Atua.ps1
+```
+
+Ou via linha de comando:
 
 ```bash
 npx eas-cli build --platform android --profile preview
 ```
+
+> **Preservação de Dados**: Como o identificador do pacote (`com.rober.cadernogastronomico`) e a assinatura digital são mantidos pela Expo, instalar uma nova versão do `.apk` por cima da atual **preserva todas as receitas salvas** no aparelho.
 
 ---
 
