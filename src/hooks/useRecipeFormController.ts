@@ -3,7 +3,16 @@ import {
   resolveSocialRecipeDraftFromUrl,
   YoutubeVideoMetadataGateway,
 } from '../adapters/youtubeMetadataGateway';
-import { splitIntoNonEmptyLines } from '../services/recipeTextParser';
+import {
+  separateRecipeSections,
+  splitIntoNonEmptyLines,
+  stripLeadingBulletOrNumber,
+} from '../services/recipeTextParser';
+import {
+  extractEmbeddedTranscriptFromNotes,
+  hasPlaceholderRecipeContent,
+  reconstructRecipeFromTranscript,
+} from '../services/recipeTranscriptParser';
 import {
   CulinaryCategory,
   CulinaryRecipeRecord,
@@ -23,6 +32,7 @@ export interface RecipeFormStateValues {
   readonly ingredientsText: string;
   readonly stepsText: string;
   readonly unifiedNotes: string;
+  readonly videoTranscriptText?: string;
   readonly tagsText: string;
   readonly isImportOpen: boolean;
   readonly isFetchingYoutube: boolean;
@@ -37,6 +47,7 @@ export interface RecipeFormController {
   ) => void;
   readonly applyImportedRecipe: (parsed: ParsedRecipeTextResult) => void;
   readonly applyYoutubeDraft: (draft: RecipeDraftInput) => void;
+  readonly organizeIngredientsAndSteps: () => void;
   readonly fetchAndFillFromYoutubeUrl: (
     youtubeUrl: string,
     youtubeGateway: YoutubeVideoMetadataGateway,
@@ -45,7 +56,7 @@ export interface RecipeFormController {
 }
 
 /**
- * Gerencia os campos editáveis do formulário de receita e a importação automática via YouTube ou texto.
+ * Gerencia os campos editáveis do formulário de receita e a importação/separação automática.
  *
  * @example
  * const form = useRecipeFormController(initialRecipe);
@@ -69,6 +80,8 @@ export function useRecipeFormController(
     updateField,
     applyImportedRecipe: (parsed) => setValues((prev) => mergeParsedRecipeIntoForm(prev, parsed)),
     applyYoutubeDraft: (draft) => setValues((prev) => mergeYoutubeDraftIntoForm(prev, draft)),
+    organizeIngredientsAndSteps: () =>
+      setValues((prev) => organizeFormIngredientsAndSteps(prev)),
     fetchAndFillFromYoutubeUrl: (url, gateway) =>
       executeYoutubeAutoFill(url, gateway, setValues, updateField),
     submitDraft: (onSave) => executeFormSubmit(values, onSave, updateField),
@@ -78,6 +91,12 @@ export function useRecipeFormController(
 function createInitialFormValues(
   existing: CulinaryRecipeRecord | null,
 ): RecipeFormStateValues {
+  const initialTranscript = existing
+    ? extractEmbeddedTranscriptFromNotes(
+        existing.unifiedChefNotesAndNutrition,
+        existing.videoTranscriptText,
+      )
+    : '';
   return {
     title: existing?.title ?? '',
     category: existing?.category ?? 'Massas',
@@ -89,6 +108,7 @@ function createInitialFormValues(
     ingredientsText: existing ? existing.ingredients.join('\n') : '',
     stepsText: existing ? existing.preparationSteps.join('\n') : '',
     unifiedNotes: existing?.unifiedChefNotesAndNutrition ?? '',
+    videoTranscriptText: initialTranscript,
     tagsText: existing ? existing.tags.join(', ') : '',
     isImportOpen: false,
     isFetchingYoutube: false,
@@ -119,7 +139,7 @@ async function executeYoutubeAutoFill(
 }
 
 /**
- * Aplica um rascunho extraído de vídeo do YouTube a todos os campos do estado do formulário.
+ * Aplica um rascunho extraído de vídeo ou site a todos os campos do estado do formulário.
  *
  * @example
  * const nextState = mergeYoutubeDraftIntoForm(currentValues, youtubeDraft);
@@ -128,6 +148,10 @@ export function mergeYoutubeDraftIntoForm(
   current: RecipeFormStateValues,
   draft: RecipeDraftInput,
 ): RecipeFormStateValues {
+  const transcript = extractEmbeddedTranscriptFromNotes(
+    draft.unifiedChefNotesAndNutrition,
+    draft.videoTranscriptText,
+  );
   return {
     ...current,
     title: draft.title,
@@ -140,6 +164,7 @@ export function mergeYoutubeDraftIntoForm(
     ingredientsText: draft.ingredients.join('\n'),
     stepsText: draft.preparationSteps.join('\n'),
     unifiedNotes: draft.unifiedChefNotesAndNutrition,
+    videoTranscriptText: transcript || current.videoTranscriptText,
     tagsText: draft.tags.join(', '),
     isImportOpen: false,
     isFetchingYoutube: false,
@@ -168,6 +193,41 @@ function mergeParsedRecipeIntoForm(
   };
 }
 
+/**
+ * Reclassifica e limpa as linhas de Ingredientes e Modo de Preparo do formulário, movendo
+ * passos colados no campo de ingredientes (e vice-versa) ou extraindo da transcrição se vazios.
+ *
+ * @example
+ * const organized = organizeFormIngredientsAndSteps(currentValues);
+ */
+export function organizeFormIngredientsAndSteps(
+  current: RecipeFormStateValues,
+): RecipeFormStateValues {
+  const combinedLines = splitIntoNonEmptyLines(
+    `${current.ingredientsText}\n${current.stepsText}`,
+  );
+  const currentTranscript = (current.videoTranscriptText ?? '').trim();
+  if (combinedLines.length === 0 && currentTranscript) {
+    const fromTranscript = reconstructRecipeFromTranscript(
+      currentTranscript,
+      current.title || 'Receita Transcrita',
+    );
+    return mergeParsedRecipeIntoForm(current, fromTranscript);
+  }
+  if (combinedLines.length === 0) return current;
+  const separated = separateRecipeSections(combinedLines);
+  const extraNotes = separated.notes.join('\n');
+  const mergedNotes = [current.unifiedNotes.trim(), extraNotes].filter(Boolean).join('\n');
+  return {
+    ...current,
+    ingredientsText:
+      separated.ingredients.length > 0 ? separated.ingredients.join('\n') : current.ingredientsText,
+    stepsText: separated.steps.length > 0 ? separated.steps.join('\n') : current.stepsText,
+    unifiedNotes: mergedNotes,
+    validationError: null,
+  };
+}
+
 async function executeFormSubmit(
   values: RecipeFormStateValues,
   onSave: (draft: RecipeDraftInput) => Promise<void>,
@@ -185,12 +245,20 @@ async function executeFormSubmit(
 }
 
 /**
- * Converte o estado textual do formulário no contrato tipado RecipeDraftInput.
+ * Converte o estado textual do formulário no contrato tipado RecipeDraftInput,
+ * separando automaticamente ingredientes e passos caso tenham sido colados juntos.
  *
  * @example
  * const draft = buildDraftFromFormValues(formValues);
  */
 export function buildDraftFromFormValues(values: RecipeFormStateValues): RecipeDraftInput {
+  const resolvedLists = resolveCleanedIngredientsAndSteps(
+    values.ingredientsText,
+    values.stepsText,
+    values.videoTranscriptText,
+    values.title,
+  );
+  const transcript = (values.videoTranscriptText ?? '').trim();
   return {
     title: values.title,
     category: values.category,
@@ -199,12 +267,43 @@ export function buildDraftFromFormValues(values: RecipeFormStateValues): RecipeD
     servingsCount: Math.max(1, parseInt(values.servings, 10) || 4),
     coverImageUri: values.coverUri.trim(),
     videoSourceUri: values.videoUri.trim(),
-    ingredients: splitIntoNonEmptyLines(values.ingredientsText),
-    preparationSteps: splitIntoNonEmptyLines(values.stepsText),
+    ingredients: resolvedLists.ingredients,
+    preparationSteps: resolvedLists.steps,
     unifiedChefNotesAndNutrition: values.unifiedNotes.trim(),
+    videoTranscriptText: transcript || undefined,
     tags: values.tagsText
       .split(',')
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0),
   };
+}
+
+function resolveCleanedIngredientsAndSteps(
+  ingredientsText: string,
+  stepsText: string,
+  transcriptText = '',
+  fallbackTitle = 'Receita',
+): { ingredients: string[]; steps: string[] } {
+  const rawIngredients = splitIntoNonEmptyLines(ingredientsText);
+  const rawSteps = splitIntoNonEmptyLines(stepsText);
+  if (rawSteps.length === 0 && rawIngredients.length > 1) {
+    const separated = separateRecipeSections(rawIngredients);
+    if (separated.ingredients.length > 0 && separated.steps.length > 0) {
+      return { ingredients: separated.ingredients, steps: separated.steps };
+    }
+  }
+  const cleanedIngs = rawIngredients.map(stripLeadingBulletOrNumber).filter(Boolean);
+  const cleanedSteps = rawSteps.map(stripLeadingBulletOrNumber).filter(Boolean);
+  if (hasPlaceholderRecipeContent(cleanedIngs, cleanedSteps) && transcriptText.trim()) {
+    const rebuilt = reconstructRecipeFromTranscript(transcriptText, fallbackTitle);
+    return {
+      ingredients: cleanedIngs.length > 0 && !hasPlaceholderRecipeContent(cleanedIngs, ['ok'])
+        ? cleanedIngs
+        : [...rebuilt.extractedIngredients],
+      steps: cleanedSteps.length > 0 && !hasPlaceholderRecipeContent(['ok'], cleanedSteps)
+        ? cleanedSteps
+        : [...rebuilt.extractedSteps],
+    };
+  }
+  return { ingredients: cleanedIngs, steps: cleanedSteps };
 }

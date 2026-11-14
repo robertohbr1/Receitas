@@ -15,10 +15,11 @@ export interface YoutubeQuickImportCardProps {
   readonly isFetching: boolean;
   readonly onAutoFillFromYoutube: (youtubeUrl: string) => Promise<void>;
   readonly onOneClickCreateFromYoutube: (youtubeUrl: string) => Promise<void>;
+  readonly onReadClipboardText?: () => Promise<string>;
 }
 
 /**
- * Painel em destaque para criar ou preencher toda a receita apenas colando um link do YouTube ou Instagram.
+ * Painel em destaque para criar ou preencher toda a receita colando qualquer link de vídeo ou site culinário.
  *
  * @example
  * <YoutubeQuickImportCard palette={palette} isFetching={false} onAutoFillFromYoutube={fill} ... />
@@ -36,6 +37,12 @@ export function YoutubeQuickImportCard(
     }
   };
 
+  const pasteClipboardAndFill = async (): Promise<void> => {
+    if (!props.onReadClipboardText || isFetching) return;
+    const copied = (await props.onReadClipboardText()).trim();
+    if (copied) handleLinkInput(copied);
+  };
+
   return (
     <View
       style={[
@@ -44,27 +51,38 @@ export function YoutubeQuickImportCard(
       ]}
     >
       <Text style={[styles.title, { color: palette.accentTerracotta }]}>
-        🎬 Importar por Link (YouTube, Instagram ou Receitas Globo)
+        🎬 Importar por Link (YouTube, Instagram ou Qualquer Site)
       </Text>
       <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
-        Cole o link do vídeo, Reel ou site Receitas Globo abaixo: extraímos título, foto de capa,
+        Cole o link do vídeo, Reel ou site de receitas abaixo: extraímos título, foto de capa,
         ingredientes e modo de preparo automaticamente!
       </Text>
-      <TextInput
-        value={youtubeLink}
-        onChangeText={handleLinkInput}
-        placeholder="Cole: youtube.com/..., instagram.com/reel/... ou receitas.globo.com/..."
-        placeholderTextColor={palette.textSecondary}
-        autoCapitalize="none"
-        style={[
-          styles.input,
-          {
-            backgroundColor: palette.backgroundCard,
-            color: palette.textPrimary,
-            borderColor: palette.borderSubtle,
-          },
-        ]}
-      />
+      <View style={styles.inputRow}>
+        <TextInput
+          value={youtubeLink}
+          onChangeText={handleLinkInput}
+          placeholder="Cole: youtube.com/..., instagram.com/reel/... ou blog/site..."
+          placeholderTextColor={palette.textSecondary}
+          autoCapitalize="none"
+          style={[
+            styles.input,
+            {
+              backgroundColor: palette.backgroundCard,
+              color: palette.textPrimary,
+              borderColor: palette.borderSubtle,
+            },
+          ]}
+        />
+        {props.onReadClipboardText && (
+          <TouchableOpacity
+            disabled={isFetching}
+            onPress={() => void pasteClipboardAndFill()}
+            style={[styles.pasteBtn, { borderColor: palette.accentTerracotta }]}
+          >
+            <Text style={[styles.pasteBtnText, { color: palette.accentTerracotta }]}>📋 Colar</Text>
+          </TouchableOpacity>
+        )}
+      </View>
       <YoutubeActionButtons
         youtubeLink={youtubeLink}
         isFetching={isFetching}
@@ -124,7 +142,10 @@ const styles = StyleSheet.create({
   card: { borderRadius: 14, borderWidth: 1.5, padding: 14, marginBottom: 18 },
   title: { fontSize: 15, fontWeight: '800', marginBottom: 4 },
   subtitle: { fontSize: 12, lineHeight: 17, marginBottom: 10 },
-  input: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, marginBottom: 10 },
+  inputRow: { flexDirection: 'row', gap: 8, alignItems: 'center', marginBottom: 10 },
+  input: { flex: 1, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
+  pasteBtn: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10 },
+  pasteBtnText: { fontSize: 12, fontWeight: '700' },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   loadingText: { fontSize: 12, fontWeight: '700' },
   buttonsRow: { flexDirection: 'row', gap: 8 },
