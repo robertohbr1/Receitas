@@ -6,6 +6,7 @@ import {
   buildRecipeDraftFromInstagramMetadata,
   decodeHtmlAttributeEntities,
   extractInstagramMetadataFromHtml,
+  extractInstagramVideoStreamUrlFromHtml,
   isInstagramPromoNoiseLine,
   isStandaloneInstagramUrl,
   stripInstagramMetaWrapperPrefix,
@@ -152,5 +153,36 @@ segundos
     expect(draft.preparationSteps).toEqual([
       'Derrete 250g de chocolate fracionado meio amargo com 2 colheres de sopa de óleo de coco no microondas de 30 em 30 segundos',
     ]);
+    expect(draft.unifiedChefNotesAndNutrition).toContain('📝 Texto Completo da Publicação:');
+  });
+
+  it('extrai stream de vídeo MP4 do Instagram e usa transcrição de áudio (Gemini/Whisper) nos dados', () => {
+    const htmlWithVideo = `
+      <meta property="og:video" content="https://scontent.cdninstagram.com/v/reel-audio.mp4?efg=1&amp;test=2" />
+    `;
+    expect(extractInstagramVideoStreamUrlFromHtml(htmlWithVideo)).toBe(
+      'https://scontent.cdninstagram.com/v/reel-audio.mp4?efg=1&test=2',
+    );
+
+    const draftWithTranscript = buildRecipeDraftFromInstagramMetadata({
+      shortcode: 'ReelAudio1',
+      canonicalPostUrl: 'https://www.instagram.com/reel/ReelAudio1/',
+      authorUsername: 'chef_audio',
+      captionText: 'Bolo de Caneca Fácil',
+      thumbnailUrl: 'https://scontent.cdninstagram.com/v/thumb.jpg',
+      videoStreamUrl: 'https://scontent.cdninstagram.com/v/reel-audio.mp4',
+      transcriptText:
+        'coloque 1 ovo e 2 colheres de chocolate em pó na caneca agora você vai levar ao microondas por 3 minutos',
+    });
+
+    expect(draftWithTranscript.preparationMinutes).toBe(3);
+    expect(draftWithTranscript.ingredients).toEqual(['1 ovo', '2 colheres de chocolate em pó']);
+    expect(draftWithTranscript.preparationSteps.length).toBeGreaterThanOrEqual(2);
+    expect(draftWithTranscript.unifiedChefNotesAndNutrition).toContain(
+      '🎙️ Transcrição Completa do Vídeo:',
+    );
+    expect(draftWithTranscript.unifiedChefNotesAndNutrition).toContain(
+      '📝 Texto Completo da Publicação:',
+    );
   });
 });
