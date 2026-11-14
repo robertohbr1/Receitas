@@ -1,6 +1,7 @@
 import {
   buildDraftFromFormValues,
   mergeYoutubeDraftIntoForm,
+  organizeFormIngredientsAndSteps,
 } from '../src/hooks/useRecipeFormController';
 import { INITIAL_SEED_RECIPES } from '../src/repositories/seedRecipesCatalog';
 import {
@@ -66,5 +67,18 @@ describe('recipeFormatter & gastronomicTheme', () => {
       title: 'Pão de Queijo do YouTube',
     });
     expect(merged.title).toBe('Pão de Queijo do YouTube');
+
+    const mixedState = {
+      ...baseState,
+      ingredientsText: '- 3 ovos\n- 2 xícaras de farinha\nModo de preparo:\n1. Bata tudo por 5 minutos.',
+      stepsText: '',
+    };
+    const organized = organizeFormIngredientsAndSteps(mixedState);
+    expect(organized.ingredientsText).toBe('3 ovos\n2 xícaras de farinha');
+    expect(organized.stepsText).toBe('Bata tudo por 5 minutos.');
+
+    const autoSeparatedDraft = buildDraftFromFormValues(mixedState);
+    expect(autoSeparatedDraft.ingredients).toEqual(['3 ovos', '2 xícaras de farinha']);
+    expect(autoSeparatedDraft.preparationSteps).toEqual(['Bata tudo por 5 minutos.']);
   });
 });
