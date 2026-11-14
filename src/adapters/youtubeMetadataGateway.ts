@@ -17,9 +17,12 @@ import {
   buildRecipeDraftFromYoutubeMetadata,
   extractYoutubeMetadataFromWatchHtml,
   isStandaloneYoutubeUrl,
+  parseYoutubeMetadataIntoRecipe,
   YoutubeRemoteVideoMetadata,
 } from '../services/youtubeDescriptionParser';
+import { hasPlaceholderRecipeContent } from '../services/recipeTranscriptParser';
 import { RecipeDraftInput } from '../types/recipeTypes';
+import { AiVideoTranscriptionGateway } from './aiVideoTranscriptionGateway';
 
 /**
  * Interface proprietária para buscar receitas do YouTube, Instagram e sites culinários por link.
@@ -65,6 +68,12 @@ export async function resolveSocialRecipeDraftFromUrl(
  * Implementação resiliente que busca os dados de páginas do YouTube e Instagram com suporte a Web (CORS) e mobile.
  */
 export class PublicWebYoutubeMetadataGateway implements YoutubeVideoMetadataGateway {
+  private readonly aiTranscriptionGateway?: AiVideoTranscriptionGateway;
+
+  public constructor(aiTranscriptionGateway?: AiVideoTranscriptionGateway) {
+    this.aiTranscriptionGateway = aiTranscriptionGateway;
+  }
+
   /**
    * Obtém título, descrição completa (ingredientes/preparo) e miniatura a partir de um link do YouTube.
    *
@@ -81,10 +90,13 @@ export class PublicWebYoutubeMetadataGateway implements YoutubeVideoMetadataGate
       );
     }
     const watchHtml = await fetchYoutubeWatchHtmlWithFallbacks(videoId);
-    if (watchHtml.includes('"shortDescription"')) {
-      return extractYoutubeMetadataFromWatchHtml(videoId, watchHtml);
-    }
-    return fetchNoembedFallbackMetadata(videoId);
+    const baseMeta = watchHtml.includes('"shortDescription"')
+      ? extractYoutubeMetadataFromWatchHtml(
+          videoId,
+          await appendYoutubeTranscriptIfMissing(videoId, watchHtml),
+        )
+      : await fetchNoembedFallbackMetadata(videoId);
+    return enrichYoutubeWithStructuredAi(baseMeta, this.aiTranscriptionGateway);
   }
 
   /**
@@ -96,12 +108,20 @@ export class PublicWebYoutubeMetadataGateway implements YoutubeVideoMetadataGate
   public async fetchSocialRecipeDraftByUrl(socialUrl: string): Promise<RecipeDraftInput> {
     const instagramCode = extractInstagramShortcode(socialUrl);
     if (instagramCode) {
-      const instaMeta = await fetchInstagramMetadataWithFallbacks(instagramCode);
+      const instaMeta = await fetchInstagramMetadataWithFallbacks(
+        instagramCode,
+        this.aiTranscriptionGateway,
+      );
       return buildRecipeDraftFromInstagramMetadata(instaMeta);
     }
     if (isStandaloneRecipeWebsiteUrl(socialUrl)) {
       const siteHtml = await fetchWebsiteHtmlWithFallbacks(socialUrl.trim());
       const siteMeta = extractRecipeWebsiteMetadataFromHtml(socialUrl, siteHtml);
+      if (siteMeta.ingredients.length === 0 && siteMeta.preparationSteps.length === 0) {
+        throw new Error(
+          `Nenhuma receita estruturada encontrada em "${socialUrl}". Esperado: página com Schema.org Recipe ou lista de ingredientes.`,
+        );
+      }
       return buildRecipeDraftFromWebsiteMetadata(siteMeta);
     }
     const youtubeMeta = await this.fetchVideoMetadataByUrl(socialUrl);
@@ -122,6 +142,63 @@ async function fetchWebsiteHtmlWithFallbacks(targetUrl: string): Promise<string>
     }
   }
   return tryFetchAllOriginsJsonWrapper(targetUrl);
+}
+
+async function appendYoutubeTranscriptIfMissing(
+  videoId: string,
+  watchHtml: string,
+): Promise<string> {
+  if (watchHtml.includes('<transcript>')) {
+    return watchHtml;
+  }
+  const transcriptXml = await fetchYoutubeTimedTextXmlDirect(videoId);
+  return transcriptXml ? `${watchHtml}\n${transcriptXml}` : watchHtml;
+}
+
+interface InnertubePlayerCaptionsResponse {
+  readonly captions?: {
+    readonly playerCaptionsTracklistRenderer?: {
+      readonly captionTracks?: ReadonlyArray<{
+        readonly baseUrl?: string;
+        readonly languageCode?: string;
+      }>;
+    };
+  };
+}
+
+async function fetchYoutubeTimedTextXmlDirect(videoId: string): Promise<string> {
+  try {
+    const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildIosInnertubePayload(videoId)),
+    });
+    if (!response.ok) return '';
+    const data = (await response.json()) as InnertubePlayerCaptionsResponse;
+    const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+    const chosen = tracks.find((t) => t.languageCode?.startsWith('pt')) ?? tracks[0];
+    return chosen?.baseUrl ? (await tryFetchTextFromEndpoint(chosen.baseUrl)) ?? '' : '';
+  } catch {
+    return '';
+  }
+}
+
+function buildIosInnertubePayload(videoId: string): Record<string, unknown> {
+  return {
+    videoId,
+    context: {
+      client: {
+        clientName: 'IOS',
+        clientVersion: '20.03.02',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.2.1.22C161',
+        hl: 'pt',
+        gl: 'BR',
+      },
+    },
+  };
 }
 
 async function fetchYoutubeWatchHtmlWithFallbacks(videoId: string): Promise<string> {
@@ -196,7 +273,58 @@ function parseNoembedJson(rawJson: string | null): {
   }
 }
 
+async function enrichYoutubeWithStructuredAi(
+  baseMeta: YoutubeRemoteVideoMetadata,
+  aiGateway?: AiVideoTranscriptionGateway,
+): Promise<YoutubeRemoteVideoMetadata> {
+  if (!aiGateway?.extractStructuredRecipeIfConfigured) {
+    return baseMeta;
+  }
+  const preliminaryParsed = parseYoutubeMetadataIntoRecipe(baseMeta);
+  const isCompleteWithoutAi =
+    !hasPlaceholderRecipeContent(
+      preliminaryParsed.extractedIngredients,
+      preliminaryParsed.extractedSteps,
+    ) && (baseMeta.transcriptText ?? '').trim().length > 20;
+  if (isCompleteWithoutAi) {
+    return baseMeta;
+  }
+  const aiStructuredRecipe = await aiGateway.extractStructuredRecipeIfConfigured({
+    sourceUrl: baseMeta.canonicalWatchUrl,
+    videoStreamUrl: '',
+    existingCaptionText: `${baseMeta.title}\n${baseMeta.descriptionText}`,
+  });
+  return aiStructuredRecipe ? { ...baseMeta, aiStructuredRecipe } : baseMeta;
+}
+
 async function fetchInstagramMetadataWithFallbacks(
+  shortcode: string,
+  aiTranscriptionGateway?: AiVideoTranscriptionGateway,
+): Promise<InstagramRemotePostMetadata> {
+  const baseMeta = await fetchRawInstagramMetadata(shortcode);
+  if (!aiTranscriptionGateway) {
+    return baseMeta;
+  }
+  const request = {
+    sourceUrl: baseMeta.canonicalPostUrl,
+    videoStreamUrl: baseMeta.videoStreamUrl ?? '',
+    existingCaptionText: baseMeta.captionText,
+  };
+  const aiStructuredRecipe = aiTranscriptionGateway.extractStructuredRecipeIfConfigured
+    ? await aiTranscriptionGateway.extractStructuredRecipeIfConfigured(request)
+    : null;
+  if (aiStructuredRecipe) {
+    return {
+      ...baseMeta,
+      aiStructuredRecipe,
+      transcriptText: aiStructuredRecipe.notesAndTranscript || undefined,
+    };
+  }
+  const transcriptText = await aiTranscriptionGateway.transcribeVideoIfConfigured(request);
+  return transcriptText ? { ...baseMeta, transcriptText } : baseMeta;
+}
+
+async function fetchRawInstagramMetadata(
   shortcode: string,
 ): Promise<InstagramRemotePostMetadata> {
   const postTarget = `https://www.instagram.com/p/${shortcode}/`;

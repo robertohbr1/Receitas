@@ -9,8 +9,10 @@ Aplicativo multiplataforma (**React Native + Expo 52 + TypeScript**) para organi
 ### 📚 Catálogo Gastronômico Offline-First
 - **Armazenamento Persistente Local**: Salva todas as receitas no dispositivo via `AsyncStorage` sem exigir criação de conta ou login.
 - **Receitas Inaugurais (Seed Catalog)**: Já inicia com receitas completas pré-cadastradas para demonstração imediata.
-- **Busca Instantânea Multimodal**: Pesquisa em tempo real por **título**, **ingredientes** ou **tags**.
-- **Filtros Rápidos**: Chips de categorias (`Todas`, `Sobremesas`, `Massas`, `Carnes`, `Rápidas`, `Saudáveis`, `Lanches`, `Bebidas`) e filtro exclusivo de **Favoritas** (`❤️`).
+- **Busca Inteligente Multi-Ingredientes e Sem Acentos** ([`recipeSearchEngine.ts`](file:///c:/Projetos/Receitas/src/services/recipeSearchEngine.ts)):
+  - Pesquisa insensível a acentos (`"pao de acucar"` encontra `"Pão de Açúcar"`) e combinada por múltiplos termos (ex.: digite `"frango batata"` para achar receitas que usam ambos os ingredientes da geladeira).
+  - Pesquisa em **título**, **categoria**, **ingredientes**, **passo a passo (`preparationSteps`)**, **tags**, **notas** e **transcrição falada do vídeo (`videoTranscriptText`)**.
+- **Filtros Rápidos e Ordenação**: Chips de categorias (`Todas`, `Sobremesas`, `Massas`, `Carnes`, `Rápidas`, `Saudáveis`, `Lanches`, `Bebidas`), filtro de **Favoritas** (`❤️`), **Até 30 min** (`⚡`), **Poucos Ingredientes (≤ 6)** (`🛒`) e ordenação (`Recentes`, `Mais Rápidas`, `Menos Ingredientes`).
 
 ### 🔗 Importação Automática por Link (YouTube, Instagram Reels & Receitas Globo)
 - **Criação em 1 Clique (`🚀 Criar Receita Direto`) ou Auto-Preenchimento (`⚡ Preencher Campos`)**:
@@ -28,11 +30,17 @@ Aplicativo multiplataforma (**React Native + Expo 52 + TypeScript**) para organi
 - **Vídeo Nativo da Galeria**: Permite escolher vídeos gravados no próprio aparelho (`expo-image-picker`) com reprodução nativa integrada (`expo-av`).
 - **Abertura Externa Rápida**: Botão dedicado para abrir o vídeo diretamente no aplicativo nativo do YouTube, Instagram ou TikTok.
 
-### 👨‍🍳 Modo Cozinha Interativo
+### 👨‍🍳 Modo Cozinha Guiado (Entendimento Sem Precisar Assistir ao Vídeo)
+- **Modo Leitura Sem Vídeo (`📖 Ler Sem Vídeo`)**: Oculta o player na tela da receita para focar 100% na execução guiada em 2 etapas (**1. Ingredientes / Mise en Place** → **2. Passo a Passo**).
+- **Decomposição Visual de Ingredientes (*Mise en Place*)** ([`recipeComprehensionEnhancer.ts`](file:///c:/Projetos/Receitas/src/services/recipeComprehensionEnhancer.ts)):
+  - Destaca separadamente a **Quantidade + Medida** (`2 xícaras`), o **Ingrediente Principal** (`farinha de trigo`) e o **Preparo Prévio / Corte** (`🔪 peneirada`, `🔪 picada em cubos`), além do botão **`📋 Copiar Faltantes`** para gerar a lista de compras apenas dos itens ainda não separados.
 - **Escalonador Proporcional de Porções** ([`portionScaler.ts`](file:///c:/Projetos/Receitas/src/services/portionScaler.ts)):
   - Aumente ou diminua o número de porções (`-` / `+`) na tela da receita e veja todas as quantidades numéricas e fracionárias (`1/2`, `2,5`, `300g`, etc.) serem recalculadas proporcionalmente em tempo real.
-- **Checklist de Bancada (*Mise en Place*)**: Marque os ingredientes já separados na bancada.
-- **Acompanhamento de Etapas**: Marque cada passo do modo de preparo conforme avança na receita.
+- **Passo a Passo Enriquecido com Ingredientes da Etapa e Modo Focado**:
+  - Cada etapa do Modo de Preparo exibe automaticamente **quais ingredientes (já escalonados pelas porções!) entram naquele passo** (`🥣 Nesta etapa: 3 ovos • 1 xícara de açúcar`), o **verbo de ação** (`🔄 Bater`), a **temperatura/fogo** (`🌡️ 180°C`) e o **ponto esperado** (`👀 Ponto: até dourar`).
+  - Alternância em 1 toque para o **`🎯 Modo Passo a Passo Focado`**, que exibe uma etapa por vez em fonte ampliada de bancada com botões `← Anterior` e `✓ Concluir e Próximo →`.
+- **Arquivo de Transcrição Offline (Proteção contra Queda de Vídeos)** ([`VideoTranscriptArchiveCard.tsx`](file:///c:/Projetos/Receitas/src/components/VideoTranscriptArchiveCard.tsx), [`recipeTranscriptParser.ts`](file:///c:/Projetos/Receitas/src/services/recipeTranscriptParser.ts)):
+  - Preserva permanentemente no aparelho tudo o que é dito no vídeo (`videoTranscriptText`), com busca interna de termos falados e botão **`🪄 Extrair Ingredientes e Passo a Passo da Transcrição`** para reconstruir receitas caso o vídeo original saia do ar.
 - **Cronômetro Regressivo Inteligente** ([`cookingTimerEngine.ts`](file:///c:/Projetos/Receitas/src/services/cookingTimerEngine.ts)):
   - **Detecção Automática de Tempo**: Identifica menções de horas, minutos e segundos no texto de cada passo (ex.: *"Asse em forno a 180°C por 40 minutos"*) e exibe um botão `⏱️ Iniciar 40:00` diretamente na etapa.
   - **Barra Flutuante de Timer**: Controles de **Play/Pause**, **+1 min**, **Zerar** e atalhos rápidos (`1m`, `5m`, `10m`, `15m`).

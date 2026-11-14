@@ -1,10 +1,21 @@
+import type { OfflineMediaCacheGateway } from '../adapters/offlineMediaCacheGateway';
 import { KeyValueStorageGateway } from '../adapters/storageGateway';
+import { isLocalGalleryUri } from '../services/videoUrlClassifier';
 import {
-  CatalogFilterCriteria,
+  decodeCatalogFromZipBase64,
+  encodeCatalogToZipBase64,
+} from '../services/zipBackupCodec';
+import {
+  filterCatalogRecipes,
+  matchesRecipeSearchQuery,
+} from '../services/recipeSearchEngine';
+import {
   CulinaryRecipeRecord,
   RecipeDraftInput,
 } from '../types/recipeTypes';
 import { INITIAL_SEED_RECIPES } from './seedRecipesCatalog';
+
+export { filterCatalogRecipes, matchesRecipeSearchQuery };
 
 const RECIPES_STORAGE_KEY = '@caderno_gastronomico:recipes_v1';
 
@@ -13,9 +24,14 @@ const RECIPES_STORAGE_KEY = '@caderno_gastronomico:recipes_v1';
  */
 export class CulinaryRecipeRepository {
   private readonly storageGateway: KeyValueStorageGateway;
+  private readonly mediaCacheGateway?: OfflineMediaCacheGateway;
 
-  public constructor(storageGateway: KeyValueStorageGateway) {
+  public constructor(
+    storageGateway: KeyValueStorageGateway,
+    mediaCacheGateway?: OfflineMediaCacheGateway,
+  ) {
     this.storageGateway = storageGateway;
+    this.mediaCacheGateway = mediaCacheGateway;
   }
 
   /**
@@ -45,8 +61,10 @@ export class CulinaryRecipeRepository {
     customId?: string,
   ): Promise<CulinaryRecipeRecord> {
     validateRecipeDraftInput(draft);
+    const targetId = customId || generateRecipeId();
+    const cachedDraft = await cacheDraftMediaOffline(draft, targetId, this.mediaCacheGateway);
     const existingRecipes = await this.loadAllRecipes();
-    const newRecord = buildRecipeRecordFromDraft(draft, customId);
+    const newRecord = buildRecipeRecordFromDraft(cachedDraft, targetId);
     const updatedList = [newRecord, ...existingRecipes];
     await this.persistRecipeCollection(updatedList);
     return newRecord;
@@ -70,10 +88,44 @@ export class CulinaryRecipeRepository {
         `Receita não encontrada para atualização. ID informado: "${recipeId}". Esperado: ID existente no catálogo.`,
       );
     }
-    const updatedRecord = mergeDraftIntoRecord(existingRecipes[targetIndex], draft);
+    const cachedDraft = await cacheDraftMediaOffline(draft, recipeId, this.mediaCacheGateway);
+    const updatedRecord = mergeDraftIntoRecord(existingRecipes[targetIndex], cachedDraft);
     existingRecipes[targetIndex] = updatedRecord;
     await this.persistRecipeCollection(existingRecipes);
     return updatedRecord;
+  }
+
+  /**
+   * Faz o download offline do stream MP4 associado à receita e aponta videoSourceUri para o arquivo local.
+   *
+   * @example
+   * const offline = await repository.saveOfflineVideoForRecipe('recipe-123');
+   */
+  public async saveOfflineVideoForRecipe(recipeId: string): Promise<CulinaryRecipeRecord> {
+    if (!this.mediaCacheGateway) {
+      throw new Error(
+        `Cache de mídia offline não configurado ao salvar vídeo da receita "${recipeId}". Esperado: OfflineMediaCacheGateway injetado.`,
+      );
+    }
+    const existingRecipes = await this.loadAllRecipes();
+    const targetIndex = existingRecipes.findIndex((item) => item.id === recipeId);
+    if (targetIndex === -1) {
+      throw new Error(
+        `Receita não encontrada ao baixar vídeo. ID informado: "${recipeId}". Esperado: ID existente no catálogo.`,
+      );
+    }
+    const current = existingRecipes[targetIndex];
+    const streamUrl = resolveDownloadableStreamUrl(current);
+    const localVideoUri = await this.mediaCacheGateway.downloadVideoStreamOffline(streamUrl, recipeId);
+    const updated: CulinaryRecipeRecord = {
+      ...current,
+      videoSourceUri: localVideoUri,
+      originalSourceUrl: current.originalSourceUrl || current.videoSourceUri,
+      archivedAtIso: new Date().toISOString(),
+    };
+    existingRecipes[targetIndex] = updated;
+    await this.persistRecipeCollection(existingRecipes);
+    return updated;
   }
 
   /**
@@ -135,6 +187,44 @@ export class CulinaryRecipeRepository {
     return mergedList;
   }
 
+  /**
+   * Exporta o catálogo completo (receitas + capas e vídeos offline) em um arquivo .zip Base64.
+   *
+   * @example
+   * const zipBase64 = await repository.exportCatalogZipBase64();
+   */
+  public async exportCatalogZipBase64(): Promise<string> {
+    if (!this.mediaCacheGateway) {
+      throw new Error(
+        'Cache de mídia não configurado para exportar ZIP. Esperado: OfflineMediaCacheGateway injetado.',
+      );
+    }
+    const existingRecipes = await this.loadAllRecipes();
+    return encodeCatalogToZipBase64(existingRecipes, this.mediaCacheGateway);
+  }
+
+  /**
+   * Importa um pacote .zip Base64 restaurando receitas e arquivos de mídia locais sem duplicar IDs.
+   *
+   * @example
+   * const updated = await repository.importCatalogZipBase64(zipBase64);
+   */
+  public async importCatalogZipBase64(zipBase64: string): Promise<CulinaryRecipeRecord[]> {
+    if (!this.mediaCacheGateway) {
+      throw new Error(
+        'Cache de mídia não configurado para restaurar ZIP. Esperado: OfflineMediaCacheGateway injetado.',
+      );
+    }
+    const importedRecords = await decodeCatalogFromZipBase64(zipBase64, this.mediaCacheGateway);
+    for (const item of importedRecords) {
+      validateRecipeDraftInput(item);
+    }
+    const existingRecipes = await this.loadAllRecipes();
+    const mergedList = mergeBackupRecords(existingRecipes, importedRecords);
+    await this.persistRecipeCollection(mergedList);
+    return mergedList;
+  }
+
   private async persistRecipeCollection(
     recipes: readonly CulinaryRecipeRecord[],
   ): Promise<void> {
@@ -167,11 +257,52 @@ export function validateRecipeDraftInput(draft: RecipeDraftInput): void {
   }
 }
 
+function generateRecipeId(): string {
+  return `recipe-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+}
+
+async function cacheDraftMediaOffline(
+  draft: RecipeDraftInput,
+  recipeId: string,
+  mediaCache?: OfflineMediaCacheGateway,
+): Promise<RecipeDraftInput> {
+  if (!mediaCache) {
+    return draft;
+  }
+  const coverImageUri = draft.coverImageUri
+    ? await mediaCache.cacheCoverImageLocally(draft.coverImageUri, recipeId)
+    : '';
+  const videoSourceUri = isLocalGalleryUri(draft.videoSourceUri.toLowerCase())
+    ? await mediaCache.persistLocalMediaFile(draft.videoSourceUri, recipeId, 'video')
+    : draft.videoSourceUri;
+  return {
+    ...draft,
+    coverImageUri,
+    videoSourceUri,
+    originalSourceUrl: draft.originalSourceUrl || resolveInitialOriginalUrl(draft.videoSourceUri),
+    archivedAtIso: draft.archivedAtIso ?? new Date().toISOString(),
+  };
+}
+
+function resolveInitialOriginalUrl(videoUri: string): string | undefined {
+  return /^https?:\/\//i.test(videoUri.trim()) ? videoUri.trim() : undefined;
+}
+
+function resolveDownloadableStreamUrl(record: CulinaryRecipeRecord): string {
+  const candidate = record.offlineVideoStreamUrl || record.videoSourceUri;
+  if (!/^https?:\/\//i.test(candidate.trim())) {
+    throw new Error(
+      `Receita "${record.title}" não possui URL MP4 direta disponível para download: "${candidate}". Esperado: stream HTTP/HTTPS.`,
+    );
+  }
+  return candidate.trim();
+}
+
 function buildRecipeRecordFromDraft(
   draft: RecipeDraftInput,
   customId?: string,
 ): CulinaryRecipeRecord {
-  const generatedId = customId || `recipe-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const generatedId = customId || generateRecipeId();
   return {
     ...draft,
     id: generatedId,
@@ -188,6 +319,10 @@ function mergeDraftIntoRecord(
   return {
     ...existing,
     ...draft,
+    originalSourceUrl: draft.originalSourceUrl ?? existing.originalSourceUrl,
+    offlineVideoStreamUrl: draft.offlineVideoStreamUrl ?? existing.offlineVideoStreamUrl,
+    archivedAtIso: draft.archivedAtIso ?? existing.archivedAtIso,
+    videoTranscriptText: draft.videoTranscriptText ?? existing.videoTranscriptText,
     title: draft.title.trim(),
   };
 }
@@ -233,47 +368,4 @@ function mergeBackupRecords(
     }
   }
   return Array.from(mapById.values());
-}
-
-/**
- * Filtra uma lista de receitas combinando busca por texto (nome, ingrediente ou tag),
- * categoria selecionada e filtro de favoritas.
- *
- * @example
- * const visible = filterCatalogRecipes(allRecipes, { searchQuery: 'cenoura', selectedCategory: 'Todas', onlyFavorites: false });
- */
-export function filterCatalogRecipes(
-  recipes: readonly CulinaryRecipeRecord[],
-  criteria: CatalogFilterCriteria,
-): CulinaryRecipeRecord[] {
-  return recipes.filter((recipe) => {
-    if (criteria.onlyFavorites && !recipe.isFavorite) return false;
-    if (criteria.selectedCategory !== 'Todas' && recipe.category !== criteria.selectedCategory) {
-      return false;
-    }
-    return matchesRecipeSearchQuery(recipe, criteria.searchQuery);
-  });
-}
-
-/**
- * Verifica se o termo pesquisado ocorre no título, nos ingredientes, nas tags ou nas notas da receita.
- *
- * @example
- * const hit = matchesRecipeSearchQuery(risotoRecipe, 'funghi');
- * // hit === true
- */
-export function matchesRecipeSearchQuery(
-  recipe: CulinaryRecipeRecord,
-  rawQuery: string,
-): boolean {
-  const normalizedQuery = rawQuery.trim().toLowerCase();
-  if (!normalizedQuery) return true;
-  const searchableFields = [
-    recipe.title,
-    recipe.category,
-    recipe.unifiedChefNotesAndNutrition,
-    ...recipe.ingredients,
-    ...recipe.tags,
-  ];
-  return searchableFields.some((field) => field.toLowerCase().includes(normalizedQuery));
 }

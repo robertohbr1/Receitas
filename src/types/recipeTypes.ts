@@ -46,6 +46,9 @@ export interface CulinaryRecipeRecord {
   readonly category: Exclude<CulinaryCategory, 'Todas'>;
   readonly coverImageUri: string;
   readonly videoSourceUri: string;
+  readonly originalSourceUrl?: string;
+  readonly offlineVideoStreamUrl?: string;
+  readonly archivedAtIso?: string;
   readonly preparationMinutes: number;
   readonly servingsCount: number;
   readonly difficulty: DifficultyLevel;
@@ -56,6 +59,11 @@ export interface CulinaryRecipeRecord {
    * e informações nutricionais / calorias.
    */
   readonly unifiedChefNotesAndNutrition: string;
+  /**
+   * Transcrição integral do que é dito e exibido no vídeo, preservada offline
+   * mesmo que o vídeo original saia do ar.
+   */
+  readonly videoTranscriptText?: string;
   readonly tags: readonly string[];
   readonly isFavorite: boolean;
   readonly createdAtIso: string;
@@ -69,14 +77,45 @@ export interface RecipeDraftInput {
   readonly category: Exclude<CulinaryCategory, 'Todas'>;
   readonly coverImageUri: string;
   readonly videoSourceUri: string;
+  readonly originalSourceUrl?: string;
+  readonly offlineVideoStreamUrl?: string;
+  readonly archivedAtIso?: string;
   readonly preparationMinutes: number;
   readonly servingsCount: number;
   readonly difficulty: DifficultyLevel;
   readonly ingredients: readonly string[];
   readonly preparationSteps: readonly string[];
   readonly unifiedChefNotesAndNutrition: string;
+  readonly videoTranscriptText?: string;
   readonly tags: readonly string[];
 }
+
+/**
+ * Link salvo na fila offline quando uma importação falha por falta de internet ou bloqueio.
+ */
+export interface PendingRecipeImportItem {
+  readonly id: string;
+  readonly sourceUrl: string;
+  readonly lastErrorMessage: string;
+  readonly addedAtIso: string;
+}
+
+/**
+ * Estrutura JSON retornada pela IA multimodal (áudio + texto visível na tela).
+ */
+export interface AiExtractedRecipePayload {
+  readonly title: string;
+  readonly preparationMinutes: number | null;
+  readonly servingsCount: number | null;
+  readonly ingredients: readonly string[];
+  readonly preparationSteps: readonly string[];
+  readonly notesAndTranscript: string;
+}
+
+/**
+ * Modos de ordenação disponíveis no catálogo de receitas.
+ */
+export type CatalogSortOrder = 'recent' | 'fastest' | 'fewest_ingredients';
 
 /**
  * Critérios de filtragem para pesquisa no catálogo de receitas.
@@ -85,6 +124,9 @@ export interface CatalogFilterCriteria {
   readonly searchQuery: string;
   readonly selectedCategory: CulinaryCategory;
   readonly onlyFavorites: boolean;
+  readonly maxPrepMinutes?: number | null;
+  readonly maxIngredientsCount?: number | null;
+  readonly sortBy?: CatalogSortOrder;
 }
 
 /**

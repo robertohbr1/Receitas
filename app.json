@@ -2,6 +2,7 @@
   "expo": {
     "name": "Caderno Gastronômico",
     "slug": "caderno-gastronomico",
+    "scheme": "cadernogastronomico",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
@@ -24,7 +25,24 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-asset"
-    ]
+      "expo-asset",
+      [
+        "expo-share-intent",
+        {
+          "iosActivationRules": {
+            "NSExtensionActivationSupportsWebURLWithMaxCount": 1,
+            "NSExtensionActivationSupportsText": true
+          },
+          "androidIntentFilters": [
+            "text/*"
+          ]
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "63d09031-ce89-4fd6-b72b-283ced987e61"
+      }
+    }
   }
 }

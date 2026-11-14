@@ -15,6 +15,9 @@ config.server = {
       if (req.url.startsWith('/api/instagram-post')) {
         return handleInstagramPostProxy(req, res);
       }
+      if (req.url.startsWith('/api/instagram-media')) {
+        return handleInstagramMediaProxy(req, res);
+      }
       if (req.url.startsWith('/api/recipe-webpage')) {
         return handleRecipeWebpageProxy(req, res);
       }
@@ -32,17 +35,54 @@ async function handleYoutubeWatchProxy(req, res) {
     return;
   }
   try {
-    const ytResponse = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-      },
-    });
-    const html = await ytResponse.text();
-    sendPlainTextResponse(res, 200, html);
+    const watchHtml = await fetchYoutubeWatchPageHtml(videoId);
+    const transcriptXml = await fetchYoutubeTimedTextViaIosPlayer(videoId);
+    sendPlainTextResponse(res, 200, `${watchHtml}\n${transcriptXml}`);
   } catch (err) {
     sendPlainTextResponse(res, 502, String(err));
+  }
+}
+
+async function fetchYoutubeWatchPageHtml(videoId) {
+  const ytResponse = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+    },
+  });
+  return ytResponse.text();
+}
+
+async function fetchYoutubeTimedTextViaIosPlayer(videoId) {
+  try {
+    const playerResp = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'IOS',
+            clientVersion: '20.03.02',
+            deviceMake: 'Apple',
+            deviceModel: 'iPhone16,2',
+            osName: 'iPhone',
+            osVersion: '18.2.1.22C161',
+            hl: 'pt',
+            gl: 'BR',
+          },
+        },
+        videoId,
+      }),
+    });
+    const playerData = await playerResp.json();
+    const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    const targetTrack = tracks.find((t) => t.languageCode && t.languageCode.startsWith('pt')) || tracks[0];
+    if (!targetTrack || !targetTrack.baseUrl) return '';
+    const captionResp = await fetch(targetTrack.baseUrl);
+    return captionResp.ok ? await captionResp.text() : '';
+  } catch {
+    return '';
   }
 }
 
@@ -71,8 +111,16 @@ async function fetchInstagramPublicSources(shortcode) {
     headers: crawlerHeaders,
   });
   const postHtml = postResp.ok ? await postResp.text() : '';
-  if (postHtml.includes('og:description')) {
-    return postHtml;
+  const embedResp = await fetch(`https://www.instagram.com/p/${shortcode}/embed/captioned/`, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+    },
+  });
+  const embedHtml = embedResp.ok ? await embedResp.text() : '';
+  if (postHtml.includes('og:description') || embedHtml) {
+    return `${postHtml}\n${embedHtml}`;
   }
   const googlebotResp = await fetch(`https://www.instagram.com/p/${shortcode}/`, {
     headers: {
@@ -81,6 +129,26 @@ async function fetchInstagramPublicSources(shortcode) {
     },
   });
   return googlebotResp.ok ? await googlebotResp.text() : postHtml;
+}
+
+async function handleInstagramMediaProxy(req, res) {
+  const parsedUrl = new URL(req.url, 'http://localhost');
+  const mediaUrl = parsedUrl.searchParams.get('url') || '';
+  if (!/^https:\/\/[a-z0-9.-]+(cdninstagram\.com|fbcdn\.net)\//i.test(mediaUrl)) {
+    res.statusCode = 400;
+    res.end('Invalid Instagram media URL');
+    return;
+  }
+  try {
+    const mediaResp = await fetch(mediaUrl);
+    const arrayBuf = await mediaResp.arrayBuffer();
+    res.setHeader('Content-Type', mediaResp.headers.get('content-type') || 'video/mp4');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.statusCode = 200;
+    res.end(Buffer.from(arrayBuf));
+  } catch (err) {
+    sendPlainTextResponse(res, 502, String(err));
+  }
 }
 
 function sendPlainTextResponse(res, statusCode, body) {
