@@ -1,5 +1,10 @@
 import React from 'react';
 import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { countRecipeListItems } from '../services/recipeGroupHeadings';
+import {
+  extractEmbeddedTranscriptFromNotes,
+  hasPlaceholderRecipeContent,
+} from '../services/recipeTranscriptParser';
 import {
   classifyRecipeVideoUri,
   formatVideoProviderLabel,
@@ -79,6 +84,15 @@ function CardBodyContent(props: {
   readonly palette: GastronomicColorPalette;
 }): React.ReactElement {
   const { recipe, palette } = props;
+  const hasCompleteSteps = !hasPlaceholderRecipeContent(
+    recipe.ingredients,
+    recipe.preparationSteps,
+  );
+  const hasSavedTranscript =
+    extractEmbeddedTranscriptFromNotes(
+      recipe.unifiedChefNotesAndNutrition,
+      recipe.videoTranscriptText,
+    ).length > 0;
   return (
     <View style={styles.cardBody}>
       <View style={styles.badgesRow}>
@@ -94,13 +108,27 @@ function CardBodyContent(props: {
             </Text>
           </View>
         )}
+        {hasCompleteSteps && (
+          <View style={[styles.badge, { backgroundColor: palette.backgroundElevated }]}>
+            <Text style={[styles.badgeText, { color: palette.successOlive }]}>
+              📖 Passo a Passo
+            </Text>
+          </View>
+        )}
+        {hasSavedTranscript && (
+          <View style={[styles.badge, { backgroundColor: palette.badgeBackground }]}>
+            <Text style={[styles.badgeText, { color: palette.accentTerracotta }]}>
+              🎙️ Transcrita
+            </Text>
+          </View>
+        )}
       </View>
       <Text style={[styles.title, { color: palette.textPrimary }]} numberOfLines={2}>
         {recipe.title}
       </Text>
       <Text style={[styles.metaRow, { color: palette.textSecondary }]}>
         ⏱️ {recipe.preparationMinutes} min • 🥘 {recipe.servingsCount} porções • 📊{' '}
-        {recipe.difficulty} • 🛒 {recipe.ingredients.length} ingr.
+        {recipe.difficulty} • 🛒 {countRecipeListItems(recipe.ingredients)} ingr.
       </Text>
     </View>
   );

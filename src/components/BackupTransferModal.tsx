@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { ClipboardGateway } from '../adapters/clipboardGateway';
+import { BackupDocumentPickerGateway } from '../adapters/documentPickerGateway';
 import { GastronomicColorPalette } from '../theme/gastronomicTheme';
 
 export interface BackupTransferModalProps {
@@ -20,12 +22,17 @@ export interface BackupTransferModalProps {
   readonly onClose: () => void;
   readonly onGenerateBackupJson: () => Promise<string>;
   readonly onRestoreBackupJson: (rawJson: string) => Promise<number>;
+  readonly onGenerateBackupZipBase64?: () => Promise<string>;
+  readonly onRestoreBackupZipBase64?: (zipBase64: string) => Promise<number>;
+  readonly documentPickerGateway?: BackupDocumentPickerGateway;
+  readonly clipboardGateway?: ClipboardGateway;
 }
 
 const BACKUP_FILENAME = 'caderno-gastronomico-backup.json';
+const BACKUP_ZIP_FILENAME = 'caderno-gastronomico-backup.zip';
 
 /**
- * Modal de Backup e Restauração que gera o arquivo .json e exibe menu visual de compartilhamento.
+ * Modal de Backup e Restauração com suporte a JSON, pacote ZIP com mídias locais e seletor de arquivo.
  *
  * @example
  * <BackupTransferModal visible={isOpen} palette={palette} onClose={close} ... />
@@ -47,6 +54,20 @@ export function BackupTransferModal(props: BackupTransferModalProps): React.Reac
     await writeAndShareBackupJsonFile(exported);
   };
 
+  const handleExportZip = async (): Promise<void> => {
+    if (!props.onGenerateBackupZipBase64) return;
+    try {
+      setIsError(false);
+      setFeedbackMsg('⏳ Empacotando receitas, capas e vídeos offline em .ZIP...');
+      const zipBase64 = await props.onGenerateBackupZipBase64();
+      await writeAndShareZipFile(zipBase64);
+      setFeedbackMsg(`✅ Pacote completo "${BACKUP_ZIP_FILENAME}" pronto para salvar ou enviar!`);
+    } catch (err) {
+      setIsError(true);
+      setFeedbackMsg(err instanceof Error ? err.message : 'Falha ao gerar pacote ZIP');
+    }
+  };
+
   const handleRestore = async (): Promise<void> => {
     try {
       const total = await props.onRestoreBackupJson(jsonText);
@@ -55,6 +76,29 @@ export function BackupTransferModal(props: BackupTransferModalProps): React.Reac
     } catch (err) {
       setIsError(true);
       setFeedbackMsg(err instanceof Error ? err.message : 'JSON de backup inválido');
+    }
+  };
+
+  const handlePickBackupFile = async (): Promise<void> => {
+    if (!props.documentPickerGateway) return;
+    try {
+      const picked = await props.documentPickerGateway.pickBackupFile();
+      if (!picked) return;
+      if (picked.format === 'zip' && props.onRestoreBackupZipBase64) {
+        const total = await props.onRestoreBackupZipBase64(picked.zipBase64);
+        setIsError(false);
+        setFeedbackMsg(`✅ Pacote ZIP "${picked.filename}" restaurado (${total} receitas)!`);
+        return;
+      }
+      if (picked.format === 'json') {
+        setJsonText(picked.jsonText);
+        const total = await props.onRestoreBackupJson(picked.jsonText);
+        setIsError(false);
+        setFeedbackMsg(`✅ Arquivo "${picked.filename}" restaurado (${total} receitas)!`);
+      }
+    } catch (err) {
+      setIsError(true);
+      setFeedbackMsg(err instanceof Error ? err.message : 'Falha ao ler arquivo de backup');
     }
   };
 
@@ -67,8 +111,13 @@ export function BackupTransferModal(props: BackupTransferModalProps): React.Reac
           showShareMenu={showShareMenu}
           feedbackMsg={feedbackMsg}
           isError={isError}
+          hasZipSupport={Boolean(props.onGenerateBackupZipBase64)}
+          hasFilePicker={Boolean(props.documentPickerGateway)}
+          clipboardGateway={props.clipboardGateway}
           onChangeJsonText={setJsonText}
           onExport={() => void handleExport()}
+          onExportZip={() => void handleExportZip()}
+          onPickBackupFile={() => void handlePickBackupFile()}
           onRestore={() => void handleRestore()}
           onFeedback={setFeedbackMsg}
           onClose={props.onClose}
@@ -108,6 +157,44 @@ async function shareBackupFileOnNative(backupJson: string): Promise<void> {
   }
 }
 
+async function writeAndShareZipFile(zipBase64: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    triggerBrowserZipDownload(zipBase64);
+    return;
+  }
+  const baseDir = FileSystem.cacheDirectory ?? FileSystem.documentDirectory ?? '';
+  const fileUri = `${baseDir}${BACKUP_ZIP_FILENAME}`;
+  await FileSystem.writeAsStringAsync(fileUri, zipBase64, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(fileUri, {
+      mimeType: 'application/zip',
+      dialogTitle: 'Compartilhar Backup Completo (.zip)',
+    });
+  }
+}
+
+function triggerBrowserZipDownload(zipBase64: string): void {
+  if (typeof document === 'undefined' || typeof Blob === 'undefined' || typeof atob !== 'function') {
+    return;
+  }
+  const binary = atob(zipBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: 'application/zip' });
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = BACKUP_ZIP_FILENAME;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(objectUrl);
+}
+
 function triggerBrowserFileDownloadFromText(backupJson: string): void {
   if (typeof document === 'undefined' || typeof Blob === 'undefined') return;
   const blob = new Blob([backupJson], { type: 'application/json' });
@@ -127,8 +214,13 @@ function BackupDialogCard(props: {
   readonly showShareMenu: boolean;
   readonly feedbackMsg: string | null;
   readonly isError: boolean;
+  readonly hasZipSupport: boolean;
+  readonly hasFilePicker: boolean;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly onChangeJsonText: (v: string) => void;
   readonly onExport: () => void;
+  readonly onExportZip: () => void;
+  readonly onPickBackupFile: () => void;
   readonly onRestore: () => void;
   readonly onFeedback: (msg: string) => void;
   readonly onClose: () => void;
@@ -140,8 +232,8 @@ function BackupDialogCard(props: {
         🔄 Backup e Troca de Aparelho
       </Text>
       <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
-        Gere e compartilhe o arquivo JSON com todas as suas receitas (WhatsApp, E-mail, Download),
-        ou cole abaixo o conteúdo de um backup para restaurar.
+        Exporte um pacote .ZIP (com fotos e vídeos locais) ou .JSON, ou escolha um arquivo do
+        aparelho para restaurar sem precisar colar texto.
       </Text>
       <BackupTopActionButtons
         palette={palette}
@@ -149,10 +241,20 @@ function BackupDialogCard(props: {
         onRestore={props.onRestore}
         canRestore={props.jsonText.trim().length > 0}
       />
+      {(props.hasZipSupport || props.hasFilePicker) && (
+        <ZipAndFilePickerRow
+          palette={palette}
+          hasZipSupport={props.hasZipSupport}
+          hasFilePicker={props.hasFilePicker}
+          onExportZip={props.onExportZip}
+          onPickBackupFile={props.onPickBackupFile}
+        />
+      )}
       {props.showShareMenu && props.jsonText.trim().length > 0 && (
         <InlineShareOptionsMenu
           palette={palette}
           jsonText={props.jsonText}
+          clipboardGateway={props.clipboardGateway}
           onFeedback={props.onFeedback}
         />
       )}
@@ -194,10 +296,16 @@ function BackupDialogCard(props: {
 function InlineShareOptionsMenu(props: {
   readonly palette: GastronomicColorPalette;
   readonly jsonText: string;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly onFeedback: (msg: string) => void;
 }): React.ReactElement {
   const { palette, jsonText, onFeedback } = props;
   const copyJson = async (): Promise<void> => {
+    if (props.clipboardGateway) {
+      await props.clipboardGateway.writeClipboardText(jsonText);
+      onFeedback('📋 JSON copiado para a Área de Transferência!');
+      return;
+    }
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       await navigator.clipboard.writeText(jsonText);
       onFeedback('📋 JSON copiado para a Área de Transferência!');
@@ -275,6 +383,46 @@ function ShareChip(props: {
     >
       <Text style={[styles.shareChipText, { color: palette.textPrimary }]}>{props.label}</Text>
     </TouchableOpacity>
+  );
+}
+
+function ZipAndFilePickerRow(props: {
+  readonly palette: GastronomicColorPalette;
+  readonly hasZipSupport: boolean;
+  readonly hasFilePicker: boolean;
+  readonly onExportZip: () => void;
+  readonly onPickBackupFile: () => void;
+}): React.ReactElement {
+  const { palette } = props;
+  return (
+    <View style={styles.actionsRow}>
+      {props.hasZipSupport && (
+        <TouchableOpacity
+          onPress={props.onExportZip}
+          style={[
+            styles.secondaryBtn,
+            { backgroundColor: palette.backgroundElevated, borderColor: palette.borderSubtle },
+          ]}
+        >
+          <Text style={[styles.secondaryBtnText, { color: palette.textPrimary }]}>
+            📦 Exportar .ZIP (com Mídias)
+          </Text>
+        </TouchableOpacity>
+      )}
+      {props.hasFilePicker && (
+        <TouchableOpacity
+          onPress={props.onPickBackupFile}
+          style={[
+            styles.secondaryBtn,
+            { backgroundColor: palette.backgroundElevated, borderColor: palette.accentTerracotta },
+          ]}
+        >
+          <Text style={[styles.secondaryBtnText, { color: palette.accentTerracotta }]}>
+            📂 Escolher Arquivo
+          </Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
 }
 
