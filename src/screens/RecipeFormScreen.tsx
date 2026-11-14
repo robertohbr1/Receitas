@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { ClipboardGateway } from '../adapters/clipboardGateway';
 import { MediaLibraryPickerGateway } from '../adapters/mediaPickerGateway';
 import {
   isStandaloneSupportedVideoUrl,
@@ -35,6 +36,7 @@ export interface RecipeFormScreenProps {
   readonly palette: GastronomicColorPalette;
   readonly mediaPickerGateway: MediaLibraryPickerGateway;
   readonly youtubeGateway: YoutubeVideoMetadataGateway;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly onCancel: () => void;
   readonly onSaveRecipeDraft: (draft: RecipeDraftInput) => Promise<void>;
 }
@@ -60,6 +62,7 @@ export function RecipeFormScreen(props: RecipeFormScreenProps): React.ReactEleme
         palette={props.palette}
         mediaPickerGateway={props.mediaPickerGateway}
         youtubeGateway={props.youtubeGateway}
+        clipboardGateway={props.clipboardGateway}
         onSaveRecipeDraft={props.onSaveRecipeDraft}
       />
       <SmartImportModal
@@ -79,6 +82,7 @@ function FormScrollableFields(props: {
   readonly palette: GastronomicColorPalette;
   readonly mediaPickerGateway: MediaLibraryPickerGateway;
   readonly youtubeGateway: YoutubeVideoMetadataGateway;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly onSaveRecipeDraft: (draft: RecipeDraftInput) => Promise<void>;
 }): React.ReactElement {
   const { form, palette, youtubeGateway, onSaveRecipeDraft } = props;
@@ -95,6 +99,11 @@ function FormScrollableFields(props: {
           await form.fetchAndFillFromYoutubeUrl(url, youtubeGateway);
         }}
         onOneClickCreateFromYoutube={oneClickCreate}
+        onReadClipboardText={
+          props.clipboardGateway
+            ? () => props.clipboardGateway!.readClipboardText()
+            : undefined
+        }
       />
       <FormMainMetadataSection
         form={form}
@@ -164,22 +173,42 @@ function RecipeTextAreasBlock(props: {
   return (
     <View>
       <LabeledInput
-        label="Ingredientes (1 por linha) *"
+        label="🛒 Ingredientes (1 por linha — use 'Massa:' ou 'Calda:' para criar grupos) *"
         value={form.values.ingredientsText}
-        placeholder={'500g de massa de lasanha\n300g de queijo muçarela'}
+        placeholder={'Massa:\n500g de massa de lasanha\nMolho:\n300g de queijo muçarela'}
         multiline
-        height={110}
+        height={115}
         palette={palette}
         onChangeText={(v) => form.updateField('ingredientsText', v)}
       />
+      <TouchableOpacity
+        onPress={form.organizeIngredientsAndSteps}
+        style={[
+          styles.organizeBtn,
+          { backgroundColor: palette.badgeBackground, borderColor: palette.borderSubtle },
+        ]}
+      >
+        <Text style={[styles.organizeBtnText, { color: palette.accentTerracotta }]}>
+          ✨ Separar e Organizar Ingredientes / Modo de Preparo Automaticamente
+        </Text>
+      </TouchableOpacity>
       <LabeledInput
-        label="Modo de Preparo (1 passo por linha - inclua minutos para ativar o timer!) *"
+        label="👩‍🍳 Modo de Preparo (1 passo por linha — inclua minutos para ativar o timer!) *"
         value={form.values.stepsText}
         placeholder={'Refogue a carne por 10 minutos\nAsse em forno a 200°C por 25 minutos'}
         multiline
-        height={120}
+        height={125}
         palette={palette}
         onChangeText={(v) => form.updateField('stepsText', v)}
+      />
+      <LabeledInput
+        label="🎙️ Transcrição do Vídeo (o que é dito no vídeo — salvo offline caso o vídeo saia do ar)"
+        value={form.values.videoTranscriptText ?? ''}
+        placeholder="Cole ou edite a transcrição falada do vídeo. Você pode clicar no botão acima para extrair ingredientes e passos dela."
+        multiline
+        height={90}
+        palette={palette}
+        onChangeText={(v) => form.updateField('videoTranscriptText', v)}
       />
       <LabeledInput
         label="Campo Único: Notas do Chef, Segredos e Informações Nutricionais / Calorias"
@@ -463,6 +492,8 @@ const styles = StyleSheet.create({
   mediaBtnsRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   galleryBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
   galleryBtnText: { fontSize: 12, fontWeight: '700' },
+  organizeBtn: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, alignItems: 'center', marginBottom: 14 },
+  organizeBtnText: { fontSize: 12, fontWeight: '700' },
   saveBtn: { paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 8 },
   saveBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
 });

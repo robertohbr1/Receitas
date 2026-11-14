@@ -1,10 +1,12 @@
 import React from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ClipboardGateway } from '../adapters/clipboardGateway';
 import { RecipeExportGateway } from '../adapters/recipeShareGateway';
 import { CookingStepsWithTimerSection } from '../components/CookingStepsWithTimerSection';
 import { FloatingCookingTimerBar } from '../components/FloatingCookingTimerBar';
 import { IngredientChecklistSection } from '../components/IngredientChecklistSection';
 import { VideoPlayerSection } from '../components/VideoPlayerSection';
+import { VideoTranscriptArchiveCard } from '../components/VideoTranscriptArchiveCard';
 import { useCookingSessionController } from '../hooks/useCookingSessionController';
 import { GastronomicColorPalette, resolveCategoryIcon } from '../theme/gastronomicTheme';
 import { CulinaryRecipeRecord } from '../types/recipeTypes';
@@ -13,23 +15,42 @@ export interface RecipeDetailScreenProps {
   readonly recipe: CulinaryRecipeRecord;
   readonly palette: GastronomicColorPalette;
   readonly exportGateway: RecipeExportGateway;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly onBackToCatalog: () => void;
   readonly onEditRecipe: (recipe: CulinaryRecipeRecord) => void;
   readonly onDeleteRecipe: (recipeId: string) => void;
   readonly onToggleFavorite: (recipeId: string) => void;
+  readonly onSaveOfflineVideo?: (recipeId: string) => Promise<void>;
+  readonly onReconstructFromTranscript?: (recipeId: string, transcriptText: string) => Promise<void>;
 }
 
 /**
- * Tela de visualização completa e Modo Cozinha com vídeo, checklist, timer e exportação PDF/Texto.
+ * Tela de visualização completa e Modo Cozinha com vídeo, transcrição offline,
+ * checklist de ingredientes (Mise en Place), passo a passo enriquecido, timer e exportação.
  *
  * @example
  * <RecipeDetailScreen recipe={selected} palette={palette} exportGateway={gateway} ... />
  */
 export function RecipeDetailScreen(props: RecipeDetailScreenProps): React.ReactElement {
+  const [isDownloadingVideo, setIsDownloadingVideo] = React.useState<boolean>(false);
+  const [downloadError, setDownloadError] = React.useState<string | null>(null);
+  const [isTextOnlyReadingMode, setIsTextOnlyReadingMode] = React.useState<boolean>(false);
   const session = useCookingSessionController(
     props.recipe.preparationMinutes,
     props.recipe.servingsCount,
   );
+  const handleOfflineVideoDownload = async (): Promise<void> => {
+    if (!props.onSaveOfflineVideo) return;
+    setIsDownloadingVideo(true);
+    setDownloadError(null);
+    try {
+      await props.onSaveOfflineVideo(props.recipe.id);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Falha ao baixar vídeo offline');
+    } finally {
+      setIsDownloadingVideo(false);
+    }
+  };
   return (
     <View style={[styles.screen, { backgroundColor: props.palette.backgroundPrimary }]}>
       <DetailTopNavigationBar
@@ -44,7 +65,20 @@ export function RecipeDetailScreen(props: RecipeDetailScreenProps): React.ReactE
         recipe={props.recipe}
         palette={props.palette}
         exportGateway={props.exportGateway}
+        clipboardGateway={props.clipboardGateway}
         session={session}
+        isDownloadingVideo={isDownloadingVideo}
+        downloadError={downloadError}
+        isTextOnlyReadingMode={isTextOnlyReadingMode}
+        onToggleTextOnlyMode={() => setIsTextOnlyReadingMode((prev) => !prev)}
+        onSaveOfflineVideo={
+          props.onSaveOfflineVideo ? () => void handleOfflineVideoDownload() : undefined
+        }
+        onReconstructFromTranscript={
+          props.onReconstructFromTranscript
+            ? (text) => void props.onReconstructFromTranscript!(props.recipe.id, text)
+            : undefined
+        }
       />
     </View>
   );
@@ -54,13 +88,29 @@ function DetailScrollableBody(props: {
   readonly recipe: CulinaryRecipeRecord;
   readonly palette: GastronomicColorPalette;
   readonly exportGateway: RecipeExportGateway;
+  readonly clipboardGateway?: ClipboardGateway;
   readonly session: ReturnType<typeof useCookingSessionController>;
+  readonly isDownloadingVideo: boolean;
+  readonly downloadError: string | null;
+  readonly isTextOnlyReadingMode: boolean;
+  readonly onToggleTextOnlyMode: () => void;
+  readonly onSaveOfflineVideo?: () => void;
+  readonly onReconstructFromTranscript?: (transcriptText: string) => void;
 }): React.ReactElement {
   const { recipe, palette, session } = props;
+  const copyTextHelper = props.clipboardGateway
+    ? (text: string) => void props.clipboardGateway!.writeClipboardText(text)
+    : undefined;
   return (
     <ScrollView contentContainerStyle={styles.scrollContent}>
       <DetailHeroSummary recipe={recipe} palette={palette} />
-      <ShareActionsRow recipe={recipe} palette={palette} exportGateway={props.exportGateway} />
+      <ShareActionsRow
+        recipe={recipe}
+        palette={palette}
+        exportGateway={props.exportGateway}
+        isTextOnlyReadingMode={props.isTextOnlyReadingMode}
+        onToggleTextOnlyMode={props.onToggleTextOnlyMode}
+      />
       <FloatingCookingTimerBar
         timerSnapshot={session.timerState}
         palette={palette}
@@ -69,22 +119,47 @@ function DetailScrollableBody(props: {
         onAddOneMinute={session.addOneMinuteToTimer}
         onSelectPresetMinutes={(mins) => session.startCustomTimer(mins * 60, `Timer ${mins} min`)}
       />
-      <VideoPlayerSection videoSourceUri={recipe.videoSourceUri} palette={palette} />
+      {props.downloadError && (
+        <Text style={{ color: palette.dangerCrimson, fontSize: 12, marginBottom: 8 }}>
+          {props.downloadError}
+        </Text>
+      )}
+      {!props.isTextOnlyReadingMode && (
+        <VideoPlayerSection
+          videoSourceUri={recipe.videoSourceUri}
+          originalSourceUrl={recipe.originalSourceUrl}
+          offlineVideoStreamUrl={recipe.offlineVideoStreamUrl}
+          isDownloadingOfflineVideo={props.isDownloadingVideo}
+          onDownloadOfflineVideo={props.onSaveOfflineVideo}
+          palette={palette}
+        />
+      )}
       <IngredientChecklistSection
         ingredients={recipe.ingredients}
         checkedIndices={session.checkedIngredients}
         palette={palette}
         baseServings={recipe.servingsCount}
         targetServings={session.targetServings}
+        recipeTitle={recipe.title}
         onAdjustServings={session.adjustTargetServings}
         onToggleIngredientIndex={session.toggleIngredient}
+        onCopyShoppingList={copyTextHelper}
       />
       <CookingStepsWithTimerSection
         steps={recipe.preparationSteps}
+        ingredients={recipe.ingredients}
+        baseServings={recipe.servingsCount}
+        targetServings={session.targetServings}
         completedSteps={session.completedSteps}
         palette={palette}
         onToggleStepCompleted={session.toggleStep}
         onStartStepTimer={session.startCustomTimer}
+      />
+      <VideoTranscriptArchiveCard
+        recipe={recipe}
+        palette={palette}
+        onCopyText={copyTextHelper}
+        onReconstructFromTranscript={props.onReconstructFromTranscript}
       />
       <UnifiedChefNotesSection recipe={recipe} palette={palette} />
     </ScrollView>
@@ -151,10 +226,33 @@ function ShareActionsRow(props: {
   readonly recipe: CulinaryRecipeRecord;
   readonly palette: GastronomicColorPalette;
   readonly exportGateway: RecipeExportGateway;
+  readonly isTextOnlyReadingMode: boolean;
+  readonly onToggleTextOnlyMode: () => void;
 }): React.ReactElement {
-  const { recipe, palette, exportGateway } = props;
+  const { recipe, palette, exportGateway, isTextOnlyReadingMode } = props;
   return (
     <View style={styles.shareRow}>
+      <TouchableOpacity
+        onPress={props.onToggleTextOnlyMode}
+        style={[
+          styles.shareBtn,
+          {
+            backgroundColor: isTextOnlyReadingMode
+              ? palette.accentTerracotta
+              : palette.backgroundCard,
+            borderColor: palette.borderSubtle,
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.shareBtnText,
+            { color: isTextOnlyReadingMode ? '#FFFFFF' : palette.textPrimary },
+          ]}
+        >
+          {isTextOnlyReadingMode ? '🎬 Mostrar Vídeo' : '📖 Ler Sem Vídeo'}
+        </Text>
+      </TouchableOpacity>
       <TouchableOpacity
         onPress={() => void exportGateway.shareRecipeAsText(recipe)}
         style={[
@@ -163,7 +261,7 @@ function ShareActionsRow(props: {
         ]}
       >
         <Text style={[styles.shareBtnText, { color: palette.textPrimary }]}>
-          📤 Compartilhar Texto
+          📤 Compartilhar
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
@@ -173,7 +271,7 @@ function ShareActionsRow(props: {
           { backgroundColor: palette.backgroundCard, borderColor: palette.borderSubtle },
         ]}
       >
-        <Text style={[styles.shareBtnText, { color: palette.accentTerracotta }]}>📄 Gerar PDF</Text>
+        <Text style={[styles.shareBtnText, { color: palette.accentTerracotta }]}>📄 PDF</Text>
       </TouchableOpacity>
     </View>
   );
@@ -213,7 +311,14 @@ function UnifiedChefNotesSection(props: {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  topNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
+  topNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
   backBtn: { paddingVertical: 6 },
   backBtnText: { fontSize: 15, fontWeight: '700' },
   navActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -227,9 +332,16 @@ const styles = StyleSheet.create({
   categoryLabel: { fontSize: 13, fontWeight: '700', marginBottom: 4 },
   recipeTitle: { fontSize: 22, fontWeight: '800', marginBottom: 6 },
   metaStats: { fontSize: 13, fontWeight: '500' },
-  shareRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  shareBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
-  shareBtnText: { fontSize: 13, fontWeight: '700' },
+  shareRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  shareBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  shareBtnText: { fontSize: 12, fontWeight: '700' },
   notesCard: { borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 16 },
   notesTitle: { fontSize: 15, fontWeight: '700', marginBottom: 8 },
   notesBody: { fontSize: 14, lineHeight: 21, marginBottom: 8 },
