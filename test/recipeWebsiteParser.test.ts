@@ -185,4 +185,55 @@ describe('recipeWebsiteParser (Receitas Globo)', () => {
       /URL do site de receita inválida/,
     );
   });
+
+  it('extrai ingredientes, passos agrupados (HowToSection) e tempo ISO-8601 de páginas com JSON-LD schema.org/Recipe', () => {
+    const jsonLdHtml = `
+      <html>
+        <head>
+          <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Recipe",
+              "name": "Torta de Limão Clássica",
+              "author": { "@type": "Person", "name": "Chef Rita" },
+              "image": ["https://img.site.com/torta-limao.jpg"],
+              "recipeCategory": "Sobremesas",
+              "totalTime": "PT1H15M",
+              "recipeYield": "10 fatias",
+              "recipeIngredient": ["200g de biscoito maisena", "100g de manteiga", "1 lata de leite condensado", "Suco de 3 limões"],
+              "recipeInstructions": [
+                {
+                  "@type": "HowToSection",
+                  "name": "Base",
+                  "itemListElement": [
+                    { "@type": "HowToStep", "text": "Triture o biscoito e misture com a manteiga." }
+                  ]
+                },
+                {
+                  "@type": "HowToSection",
+                  "name": "Recheio",
+                  "itemListElement": [
+                    { "@type": "HowToStep", "text": "Bata o leite condensado com o suco de limão." }
+                  ]
+                }
+              ]
+            }
+          </script>
+        </head>
+      </html>
+    `;
+    const meta = extractRecipeWebsiteMetadataFromHtml(
+      'https://www.tudogostoso.com.br/receita/torta-de-limao.html',
+      jsonLdHtml,
+    );
+    expect(meta.title).toBe('Torta de Limão Clássica');
+    expect(meta.authorName).toBe('Chef Rita');
+    expect(meta.preparationMinutes).toBe(75);
+    expect(meta.servingsCount).toBe(10);
+    expect(meta.ingredients).toHaveLength(4);
+    expect(meta.preparationSteps).toEqual([
+      '[Base] Triture o biscoito e misture com a manteiga.',
+      '[Recheio] Bata o leite condensado com o suco de limão.',
+    ]);
+  });
 });

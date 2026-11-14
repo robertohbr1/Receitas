@@ -3,10 +3,12 @@ import {
   cleanYoutubeVideoTitle,
   extractJsonStringField,
   extractYoutubeMetadataFromWatchHtml,
+  extractYoutubeTranscriptFromTimedTextXml,
   inferCategoryFromRecipeText,
   isStandaloneYoutubeUrl,
   isYoutubePromoNoiseLine,
   parseYoutubeMetadataIntoRecipe,
+  splitTranscriptIntoCookingSteps,
   stripYoutubePromotionalLines,
 } from '../src/services/youtubeDescriptionParser';
 import { FakeYoutubeVideoMetadataGateway } from './fakes/InMemoryStorageGateway';
@@ -117,5 +119,42 @@ describe('youtubeDescriptionParser', () => {
       '3 ovos',
       '300g de queijo ralado',
     ]);
+  });
+
+  it('transcreve XML timedtext do YouTube, gera passos de preparo falados e grava texto completo nos dados', () => {
+    const timedTextXml = [
+      '<transcript>',
+      '<text start="0.08" dur="3.64">aqui na bacia você vai colocar 500 g de polvilho azedo e misturar bem</text>',
+      '<text start="3.72" dur="4.20">agora você vai ferver a água e o óleo para escaldar o polvilho</text>',
+      '<text start="7.92" dur="5.10">depois de frio adicione 3 ovos e 300 g de queijo ralado</text>',
+      '<text start="13.02" dur="4.50">agora é mão na massa e assar em forno a 180º por 40 minutos</text>',
+      '</transcript>',
+    ].join('');
+
+    const transcript = extractYoutubeTranscriptFromTimedTextXml(timedTextXml);
+    expect(transcript).toContain('500 g de polvilho azedo');
+    expect(transcript).toContain('40 minutos');
+
+    const spokenSteps = splitTranscriptIntoCookingSteps(transcript);
+    expect(spokenSteps.length).toBe(4);
+    expect(spokenSteps[0]).toMatch(/^Aqui na bacia/);
+    expect(spokenSteps[3]).toContain('40 minutos.');
+
+    const watchHtmlWithTranscript = `var ytInitialPlayerResponse = ${JSON.stringify({
+      videoDetails: {
+        title: 'PÃO DE QUEIJO COM POLVILHO AZEDO',
+        author: 'Ediane - Comida Mineira',
+        shortDescription: 'INGREDIENTES\n500g de Polvilho azedo\n3 ovos',
+      },
+    })};\n${timedTextXml}`;
+
+    const meta = extractYoutubeMetadataFromWatchHtml('eydMbeMvEe8', watchHtmlWithTranscript);
+    expect(meta.transcriptText).toBe(transcript);
+
+    const draft = buildRecipeDraftFromYoutubeMetadata(meta);
+    expect(draft.preparationSteps.length).toBe(4);
+    expect(draft.preparationMinutes).toBe(40);
+    expect(draft.unifiedChefNotesAndNutrition).toContain('🎙️ Transcrição Completa do Vídeo:');
+    expect(draft.unifiedChefNotesAndNutrition).toContain(transcript);
   });
 });
