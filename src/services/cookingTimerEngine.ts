@@ -1,3 +1,5 @@
+import { findCookingDurationMentions } from './cookingDurationParser';
+
 /**
  * Estado imutável do cronômetro integrado do Modo Cozinha.
  */
@@ -17,13 +19,13 @@ export interface CookingTimerSnapshot {
  * // seconds === 720
  */
 export function detectStepDurationSeconds(stepText: string): number | null {
-  const hoursMatch = stepText.match(/(\d{1,2})\s*h(?:ora)?s?\b/i);
-  const minutesMatch = stepText.match(/(\d{1,3})\s*min(?:uto)?s?\b/i);
-  const secondsMatch = stepText.match(/(\d{1,3})\s*seg(?:undo)?s?\b/i);
+  // Soma a primeira menção em horas/minutos com a primeira em segundos para cobrir
+  // passos como "Bata por 2 minutos e 30 segundos"; o formato "1h30" vem do parser compartilhado.
+  const mentions = findCookingDurationMentions(stepText);
+  const firstLongMention = mentions.find((mention) => !mention.isSecondsOnly);
+  const firstSecondsMention = mentions.find((mention) => mention.isSecondsOnly);
   const totalSeconds =
-    (hoursMatch ? parseInt(hoursMatch[1], 10) * 3600 : 0) +
-    (minutesMatch ? parseInt(minutesMatch[1], 10) * 60 : 0) +
-    (secondsMatch ? parseInt(secondsMatch[1], 10) : 0);
+    (firstLongMention?.totalSeconds ?? 0) + (firstSecondsMention?.totalSeconds ?? 0);
   return totalSeconds > 0 ? totalSeconds : null;
 }
 

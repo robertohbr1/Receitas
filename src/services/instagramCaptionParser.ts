@@ -1,5 +1,17 @@
-import { ParsedRecipeTextResult, RecipeDraftInput } from '../types/recipeTypes';
-import { parseFreeformRecipeText, splitIntoNonEmptyLines } from './recipeTextParser';
+import {
+  AiExtractedRecipePayload,
+  ParsedRecipeTextResult,
+  RecipeDraftInput,
+} from '../types/recipeTypes';
+import {
+  extractPreparationMinutesFromText,
+  parseFreeformRecipeText,
+  splitIntoNonEmptyLines,
+} from './recipeTextParser';
+import {
+  extractSpokenIngredientsFromTranscript,
+  splitTranscriptIntoCookingSteps,
+} from './recipeTranscriptParser';
 import { extractInstagramShortcode } from './videoUrlClassifier';
 import {
   inferCategoryFromRecipeText,
@@ -15,10 +27,13 @@ export interface InstagramRemotePostMetadata {
   readonly authorUsername: string;
   readonly captionText: string;
   readonly thumbnailUrl: string;
+  readonly videoStreamUrl?: string;
+  readonly transcriptText?: string;
+  readonly aiStructuredRecipe?: AiExtractedRecipePayload | null;
 }
 
 /**
- * Extrai a legenda completa, autor e miniatura a partir do HTML público ou de embed do Instagram.
+ * Extrai a legenda completa, autor, miniatura e URL de vídeo do HTML do Instagram.
  *
  * @example
  * const meta = extractInstagramMetadataFromHtml('C8abc123', rawEmbedHtml);
@@ -36,13 +51,36 @@ export function extractInstagramMetadataFromHtml(
   const rawCaption = extractRawCaptionFromInstagramHtml(pageHtml);
   const author = extractInstagramAuthorFromHtml(pageHtml);
   const thumbnail = extractMetaTagContent(pageHtml, 'og:image');
+  const videoStreamUrl = extractInstagramVideoStreamUrlFromHtml(pageHtml);
   return {
     shortcode,
     canonicalPostUrl: `https://www.instagram.com/reel/${shortcode}/`,
     authorUsername: author,
     captionText: rawCaption,
     thumbnailUrl: decodeHtmlAttributeEntities(thumbnail),
+    videoStreamUrl,
   };
+}
+
+/**
+ * Localiza a URL direta do stream MP4 (`og:video` ou `video_url`) embutida no HTML do Instagram.
+ *
+ * @example
+ * const mp4Url = extractInstagramVideoStreamUrlFromHtml('<meta property="og:video" content="https://cdn.ig/v.mp4" />');
+ */
+export function extractInstagramVideoStreamUrlFromHtml(pageHtml: string): string {
+  const ogVideo =
+    extractMetaTagContent(pageHtml, 'og:video:secure_url') ||
+    extractMetaTagContent(pageHtml, 'og:video');
+  if (ogVideo) {
+    return decodeHtmlAttributeEntities(ogVideo);
+  }
+  const jsonMatch = pageHtml.match(/\\?"video_url\\?":\s*\\?"(https:[^"\\]+(?:\\.[^"\\]+)*)\\?"/i);
+  if (!jsonMatch || !jsonMatch[1]) {
+    return '';
+  }
+  const unescaped = jsonMatch[1].replace(/\\\//g, '/').replace(/\\u0026/gi, '&');
+  return decodeHtmlAttributeEntities(unescaped);
 }
 
 function extractRawCaptionFromInstagramHtml(pageHtml: string): string {
@@ -184,54 +222,139 @@ export function buildRecipeDraftFromInstagramMetadata(
   metadata: InstagramRemotePostMetadata,
 ): RecipeDraftInput {
   const cleanedCaption = stripInstagramPromotionalLines(metadata.captionText);
-  const parsed = parseCaptionOrFallback(cleanedCaption, metadata.shortcode);
+  const aiPayload = metadata.aiStructuredRecipe ?? null;
+  const rawTranscript = (metadata.transcriptText ?? '').trim();
+  const baseParsed = parseCaptionOrFallback(cleanedCaption, rawTranscript, metadata.shortcode);
+  const parsed = mergeParsedCaptionWithAiPayload(baseParsed, aiPayload, cleanedCaption);
+  const fullTranscript = rawTranscript || (aiPayload?.notesAndTranscript ?? '').trim();
   const category = inferCategoryFromRecipeText(
     `${parsed.extractedTitle} ${parsed.extractedIngredients.join(' ')}`,
   );
-  const authorNote = metadata.authorUsername ? `Instagram: @${metadata.authorUsername}` : '';
   return {
     title: cleanInstagramRecipeTitle(parsed.extractedTitle),
     category,
     coverImageUri: metadata.thumbnailUrl,
     videoSourceUri: metadata.canonicalPostUrl,
+    originalSourceUrl: metadata.canonicalPostUrl,
+    offlineVideoStreamUrl: metadata.videoStreamUrl || undefined,
     preparationMinutes: parsed.extractedMinutes,
     servingsCount: parsed.extractedServings,
     difficulty: parsed.extractedIngredients.length > 8 ? 'Médio' : 'Fácil',
     ingredients: parsed.extractedIngredients,
     preparationSteps: parsed.extractedSteps,
-    unifiedChefNotesAndNutrition: [authorNote, parsed.extractedNotesAndNutrition]
-      .filter((part) => part.trim().length > 0)
-      .join('\n'),
+    unifiedChefNotesAndNutrition: composeInstagramNotesAndFullText(
+      metadata,
+      parsed,
+      cleanedCaption,
+      fullTranscript,
+    ),
+    videoTranscriptText: fullTranscript || undefined,
     tags: ['Instagram', category],
   };
 }
 
+function mergeParsedCaptionWithAiPayload(
+  parsed: ParsedRecipeTextResult,
+  aiPayload: AiExtractedRecipePayload | null,
+  cleanedCaption: string,
+): ParsedRecipeTextResult {
+  if (!aiPayload) return parsed;
+  const hasCaption = cleanedCaption.trim().length > 0;
+  const hasRealIngredients = !parsed.extractedIngredients[0]?.startsWith('Confira ');
+  const hasRealSteps =
+    parsed.extractedSteps.length > 0 &&
+    !parsed.extractedSteps[0]?.startsWith('Siga o passo a passo') &&
+    !parsed.extractedSteps[0]?.startsWith('Assista ao Reel');
+  return {
+    extractedTitle:
+      aiPayload.title && (!hasCaption || parsed.extractedTitle.startsWith('Receita do Instagram'))
+        ? aiPayload.title
+        : parsed.extractedTitle,
+    extractedIngredients:
+      aiPayload.ingredients.length > 0 && (!hasRealIngredients || !hasCaption)
+        ? aiPayload.ingredients
+        : parsed.extractedIngredients,
+    extractedSteps:
+      aiPayload.preparationSteps.length > 0 && (!hasRealSteps || !hasCaption)
+        ? aiPayload.preparationSteps
+        : parsed.extractedSteps,
+    extractedMinutes: aiPayload.preparationMinutes ?? parsed.extractedMinutes,
+    extractedServings: aiPayload.servingsCount ?? parsed.extractedServings,
+    extractedNotesAndNutrition: parsed.extractedNotesAndNutrition,
+  };
+}
+
+function composeInstagramNotesAndFullText(
+  metadata: InstagramRemotePostMetadata,
+  parsed: ParsedRecipeTextResult,
+  cleanedCaption: string,
+  transcript: string,
+): string {
+  const authorNote = metadata.authorUsername ? `Instagram: @${metadata.authorUsername}` : '';
+  const transcriptNote = transcript ? `🎙️ Transcrição Completa do Vídeo:\n${transcript}` : '';
+  const captionNote = cleanedCaption
+    ? `📝 Texto Completo da Publicação:\n${cleanedCaption}`
+    : '';
+  return [authorNote, parsed.extractedNotesAndNutrition, transcriptNote, captionNote]
+    .filter((part) => part.trim().length > 0)
+    .join('\n\n');
+}
+
 function parseCaptionOrFallback(
   cleanedCaption: string,
+  transcript: string,
   shortcode: string,
 ): ParsedRecipeTextResult {
-  if (!cleanedCaption.trim()) {
-    return {
-      extractedTitle: `Receita do Instagram (${shortcode})`,
-      extractedIngredients: ['Confira os ingredientes na legenda ou vídeo do Reel'],
-      extractedSteps: ['Assista ao Reel do Instagram acima para acompanhar o preparo.'],
-      extractedMinutes: 25,
-      extractedServings: 4,
-      extractedNotesAndNutrition: '',
-    };
+  if (!cleanedCaption.trim() && !transcript.trim()) {
+    return buildEmptyInstagramFallback(shortcode);
   }
-  const parsed = parseFreeformRecipeText(cleanedCaption);
+  const parsed = parseFreeformRecipeText(cleanedCaption || transcript);
   return {
     ...parsed,
-    extractedIngredients:
-      parsed.extractedIngredients.length > 0
-        ? parsed.extractedIngredients
-        : ['Confira as quantidades demonstradas no Reel'],
-    extractedSteps:
-      parsed.extractedSteps.length > 0
-        ? parsed.extractedSteps
-        : ['Siga o passo a passo demonstrado no vídeo do Instagram.'],
+    extractedMinutes:
+      parsed.extractedMinutes === 30 && transcript
+        ? extractPreparationMinutesFromText(transcript)
+        : parsed.extractedMinutes,
+    extractedIngredients: resolveInstagramIngredientsWithTranscript(
+      parsed.extractedIngredients,
+      transcript,
+    ),
+    extractedSteps: resolveInstagramStepsWithTranscript(parsed.extractedSteps, transcript),
   };
+}
+
+function resolveInstagramIngredientsWithTranscript(
+  extractedIngredients: readonly string[],
+  transcript: string,
+): readonly string[] {
+  if (extractedIngredients.length > 0) return extractedIngredients;
+  const spoken = extractSpokenIngredientsFromTranscript(transcript);
+  return spoken.length > 0 ? spoken : ['Confira as quantidades demonstradas no Reel'];
+}
+
+function buildEmptyInstagramFallback(shortcode: string): ParsedRecipeTextResult {
+  return {
+    extractedTitle: `Receita do Instagram (${shortcode})`,
+    extractedIngredients: ['Confira os ingredientes na legenda ou vídeo do Reel'],
+    extractedSteps: ['Assista ao Reel do Instagram acima para acompanhar o preparo.'],
+    extractedMinutes: 25,
+    extractedServings: 4,
+    extractedNotesAndNutrition: '',
+  };
+}
+
+function resolveInstagramStepsWithTranscript(
+  extractedSteps: readonly string[],
+  transcript: string,
+): readonly string[] {
+  if (extractedSteps.length > 0) {
+    return extractedSteps;
+  }
+  const spokenSteps = splitTranscriptIntoCookingSteps(transcript);
+  if (spokenSteps.length > 0) {
+    return spokenSteps;
+  }
+  return ['Siga o passo a passo demonstrado no vídeo do Instagram.'];
 }
 
 function cleanInstagramRecipeTitle(rawTitle: string): string {
