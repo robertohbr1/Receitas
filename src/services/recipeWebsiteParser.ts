@@ -4,6 +4,7 @@ import {
   RecipeDraftInput,
 } from '../types/recipeTypes';
 import { decodeHtmlAttributeEntities } from './instagramCaptionParser';
+import { extractJsonLdRecipeFromHtml } from './recipeJsonLdParser';
 import {
   extractPreparationMinutesFromText,
   extractServingsFromText,
@@ -36,12 +37,31 @@ export interface RecipeWebsiteExtractedMetadata {
  * const isSite = isStandaloneRecipeWebsiteUrl('https://receitas.globo.com/receitas-da-tv/e-de-casa/alcatra.ghtml');
  * // isSite === true
  */
+const SOCIAL_VIDEO_HOST_PATTERN =
+  /^https?:\/\/(?:www\.|m\.|vm\.|vt\.)?(youtube\.com|youtu\.be|instagram\.com|tiktok\.com)(?:\/|$)/i;
+
+const KNOWN_RECIPE_PORTALS_PATTERN =
+  /(receitas\.globo\.com|gshow\.globo\.com|tudogostoso\.com\.br|panelinha\.com\.br|cybercook\.com\.br|receitasnestle\.com\.br|tastemade\.com\.br|\.ghtml\b|\/receitas?\/)/i;
+
+/**
+ * Verifica se o texto informado é um link isolado de site ou blog culinário (ex: Receitas Globo, TudoGostoso ou páginas com Schema.org Recipe).
+ *
+ * @example
+ * const isSite = isStandaloneRecipeWebsiteUrl('https://receitas.globo.com/receitas-da-tv/e-de-casa/alcatra.ghtml');
+ * // isSite === true
+ */
 export function isStandaloneRecipeWebsiteUrl(rawInput: string): boolean {
   const trimmed = rawInput.trim();
-  if (!/^https?:\/\/\S+$/i.test(trimmed)) {
+  if (!/^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(trimmed)) {
     return false;
   }
-  return /(receitas\.globo\.com|gshow\.globo\.com|\.ghtml\b|\/receitas?\/)/i.test(trimmed);
+  if (SOCIAL_VIDEO_HOST_PATTERN.test(trimmed)) {
+    return false;
+  }
+  if (KNOWN_RECIPE_PORTALS_PATTERN.test(trimmed)) {
+    return true;
+  }
+  return /^https?:\/\/[^/\s]+\.[^/\s]+\/\S+/i.test(trimmed);
 }
 
 /**
@@ -60,22 +80,26 @@ export function extractRecipeWebsiteMetadataFromHtml(
       `URL do site de receita inválida: "${sourceUrl}". Esperado: URL HTTP/HTTPS não vazia.`,
     );
   }
-  const ingredients = extractStructuredWebsiteIngredients(pageHtml);
-  const preparationSteps = extractStructuredWebsiteSteps(pageHtml);
-  const stepsCombinedText = preparationSteps.join(' ');
+  const jsonLd = extractJsonLdRecipeFromHtml(pageHtml);
+  const microIngredients = extractStructuredWebsiteIngredients(pageHtml);
+  const microSteps = extractStructuredWebsiteSteps(pageHtml);
+  const ingredients = microIngredients.length > 0 ? microIngredients : (jsonLd?.ingredients ?? []);
+  const preparationSteps = microSteps.length > 0 ? microSteps : (jsonLd?.preparationSteps ?? []);
+  const stepsText = preparationSteps.join(' ');
   return {
     sourceUrl: sourceUrl.trim(),
-    title: extractWebsiteRecipeTitle(pageHtml),
-    authorName: extractWebsiteAuthorName(pageHtml),
+    title: extractWebsiteRecipeTitle(pageHtml, jsonLd?.title),
+    authorName: extractWebsiteAuthorName(pageHtml) || jsonLd?.authorName || '',
     programName: extractWebsiteProgramName(pageHtml),
-    coverImageUrl: extractWebsiteCoverImage(pageHtml),
+    coverImageUrl: extractWebsiteCoverImage(pageHtml) || jsonLd?.coverImageUrl || '',
     videoUrl: extractWebsiteVideoUrl(pageHtml),
-    categoryName: extractMicrodataMetaContent(pageHtml, 'recipeCategory'),
+    categoryName:
+      extractMicrodataMetaContent(pageHtml, 'recipeCategory') || jsonLd?.categoryName || '',
     difficultyLabel: extractWebsiteDifficultyLabel(pageHtml),
     ingredients,
     preparationSteps,
-    preparationMinutes: extractPreparationMinutesFromText(stepsCombinedText),
-    servingsCount: extractServingsFromText(stepsCombinedText),
+    preparationMinutes: jsonLd?.totalMinutes ?? extractPreparationMinutesFromText(stepsText),
+    servingsCount: jsonLd?.servingsCount ?? extractServingsFromText(stepsText),
   };
 }
 
@@ -187,7 +211,7 @@ function collectCleanedRegexMatches(source: string, pattern: RegExp): string[] {
   return items;
 }
 
-function extractWebsiteRecipeTitle(pageHtml: string): string {
+function extractWebsiteRecipeTitle(pageHtml: string, jsonLdTitle?: string): string {
   const headlineMatch = pageHtml.match(
     /<h1[^>]*itemprop=["']headline["'][^>]*>([\s\S]*?)<\/h1>/i,
   );
@@ -196,7 +220,8 @@ function extractWebsiteRecipeTitle(pageHtml: string): string {
     if (headline) return headline;
   }
   const ogTitle = extractOpenGraphMetaContent(pageHtml, 'og:title');
-  return ogTitle.replace(/\s*\|\s*Receitas.*$/i, '').trim() || 'Receita Importada da Web';
+  const cleanedOg = ogTitle.replace(/\s*\|\s*Receitas.*$/i, '').trim();
+  return cleanedOg || jsonLdTitle || 'Receita Importada da Web';
 }
 
 function extractWebsiteAuthorName(pageHtml: string): string {
@@ -279,13 +304,17 @@ export function buildRecipeDraftFromWebsiteMetadata(
     category,
     coverImageUri: metadata.coverImageUrl,
     videoSourceUri: metadata.videoUrl || metadata.sourceUrl,
+    originalSourceUrl: metadata.sourceUrl,
+    offlineVideoStreamUrl: /\.(mp4|mov|m4v)(\?|$)/i.test(metadata.videoUrl)
+      ? metadata.videoUrl
+      : undefined,
     preparationMinutes: metadata.preparationMinutes,
     servingsCount: metadata.servingsCount,
     difficulty,
     ingredients: resolvedLists.ingredients,
     preparationSteps: resolvedLists.steps,
     unifiedChefNotesAndNutrition: buildWebsiteChefNotes(metadata),
-    tags: buildWebsiteTags(metadata.programName, category),
+    tags: buildWebsiteTags(metadata.sourceUrl, metadata.programName, category),
   };
 }
 
@@ -346,11 +375,20 @@ function buildWebsiteChefNotes(metadata: RecipeWebsiteExtractedMetadata): string
 }
 
 function buildWebsiteTags(
+  sourceUrl: string,
   programName: string,
   category: Exclude<CulinaryCategory, 'Todas'>,
 ): string[] {
-  const rawTags = ['Receitas Globo', programName, category].filter(
+  const siteTag = resolveWebsiteSourceTag(sourceUrl);
+  const rawTags = [siteTag, programName, category].filter(
     (item) => item && item.trim().length > 0,
   );
   return Array.from(new Set(rawTags));
+}
+
+function resolveWebsiteSourceTag(sourceUrl: string): string {
+  const lower = sourceUrl.toLowerCase();
+  if (lower.includes('globo.com')) return 'Receitas Globo';
+  const hostMatch = lower.match(/^https?:\/\/(?:www\.)?([^/]+)/);
+  return hostMatch && hostMatch[1] ? hostMatch[1] : 'Site de Receitas';
 }

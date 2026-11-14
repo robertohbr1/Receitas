@@ -1,10 +1,25 @@
 import {
+  AiExtractedRecipePayload,
   CulinaryCategory,
   ParsedRecipeTextResult,
   RecipeDraftInput,
 } from '../types/recipeTypes';
-import { parseFreeformRecipeText, splitIntoNonEmptyLines } from './recipeTextParser';
+import {
+  extractPreparationMinutesFromText,
+  parseFreeformRecipeText,
+  splitIntoNonEmptyLines,
+} from './recipeTextParser';
+import {
+  extractSpokenIngredientsFromTranscript,
+  extractYoutubeTranscriptFromTimedTextXml,
+  splitTranscriptIntoCookingSteps,
+} from './recipeTranscriptParser';
 import { extractYoutubeVideoId } from './videoUrlClassifier';
+
+export {
+  extractYoutubeTranscriptFromTimedTextXml,
+  splitTranscriptIntoCookingSteps,
+} from './recipeTranscriptParser';
 
 /**
  * Metadados brutos extraídos de uma página de vídeo do YouTube.
@@ -16,6 +31,8 @@ export interface YoutubeRemoteVideoMetadata {
   readonly descriptionText: string;
   readonly thumbnailUrl: string;
   readonly channelName: string;
+  readonly transcriptText?: string;
+  readonly aiStructuredRecipe?: AiExtractedRecipePayload | null;
 }
 
 interface EmbeddedVideoDetailsShape {
@@ -43,6 +60,7 @@ export function extractYoutubeMetadataFromWatchHtml(
     );
   }
   const details = extractVideoDetailsFromHtml(watchPageHtml);
+  const transcriptText = extractYoutubeTranscriptFromTimedTextXml(watchPageHtml);
   return {
     videoId,
     canonicalWatchUrl: `https://www.youtube.com/watch?v=${videoId}`,
@@ -50,6 +68,7 @@ export function extractYoutubeMetadataFromWatchHtml(
     descriptionText: details.shortDescription,
     thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
     channelName: details.author,
+    transcriptText,
   };
 }
 
@@ -273,24 +292,59 @@ function ensureNonEmptyRecipeSections(
   parsed: ParsedRecipeTextResult,
   metadata: YoutubeRemoteVideoMetadata,
 ): ParsedRecipeTextResult {
-  const fallbackIngredients =
-    parsed.extractedIngredients.length > 0
-      ? parsed.extractedIngredients
-      : ['Confira as quantidades exatas demonstradas no vídeo'];
-  const fallbackSteps =
-    parsed.extractedSteps.length > 0
-      ? parsed.extractedSteps
-      : ['Assista ao passo a passo no vídeo acima e siga a ordem de preparo indicada.'];
-  const channelNote = metadata.channelName ? `Canal do YouTube: ${metadata.channelName}` : '';
+  const transcript = (metadata.transcriptText ?? '').trim();
+  const fallbackIngredients = resolveYoutubeIngredientsWithTranscript(
+    parsed.extractedIngredients,
+    transcript,
+  );
+  const fallbackSteps = resolveStepsWithTranscriptFallback(parsed.extractedSteps, transcript);
+  const extractedMinutes =
+    parsed.extractedMinutes === 30 && transcript
+      ? extractPreparationMinutesFromText(transcript)
+      : parsed.extractedMinutes;
   return {
     ...parsed,
     extractedTitle: metadata.title || parsed.extractedTitle,
     extractedIngredients: fallbackIngredients,
     extractedSteps: fallbackSteps,
-    extractedNotesAndNutrition: [channelNote, parsed.extractedNotesAndNutrition]
-      .filter((part) => part.trim().length > 0)
-      .join('\n'),
+    extractedMinutes,
+    extractedNotesAndNutrition: composeYoutubeNotesAndTranscript(metadata, parsed, transcript),
   };
+}
+
+function resolveYoutubeIngredientsWithTranscript(
+  extractedIngredients: readonly string[],
+  transcript: string,
+): readonly string[] {
+  if (extractedIngredients.length > 0) return extractedIngredients;
+  const spoken = extractSpokenIngredientsFromTranscript(transcript);
+  return spoken.length > 0 ? spoken : ['Confira as quantidades exatas demonstradas no vídeo'];
+}
+
+function composeYoutubeNotesAndTranscript(
+  metadata: YoutubeRemoteVideoMetadata,
+  parsed: ParsedRecipeTextResult,
+  transcript: string,
+): string {
+  const channelNote = metadata.channelName ? `Canal do YouTube: ${metadata.channelName}` : '';
+  const transcriptNote = transcript ? `🎙️ Transcrição Completa do Vídeo:\n${transcript}` : '';
+  return [channelNote, parsed.extractedNotesAndNutrition, transcriptNote]
+    .filter((part) => part.trim().length > 0)
+    .join('\n\n');
+}
+
+function resolveStepsWithTranscriptFallback(
+  extractedSteps: readonly string[],
+  transcript: string,
+): readonly string[] {
+  if (extractedSteps.length > 0) {
+    return extractedSteps;
+  }
+  const transcriptSteps = splitTranscriptIntoCookingSteps(transcript);
+  if (transcriptSteps.length > 0) {
+    return transcriptSteps;
+  }
+  return ['Assista ao passo a passo no vídeo acima e siga a ordem de preparo indicada.'];
 }
 
 /**
@@ -303,22 +357,64 @@ function ensureNonEmptyRecipeSections(
 export function buildRecipeDraftFromYoutubeMetadata(
   metadata: YoutubeRemoteVideoMetadata,
 ): RecipeDraftInput {
-  const parsed = parseYoutubeMetadataIntoRecipe(metadata);
-  const category = inferCategoryFromRecipeText(
-    `${metadata.title} ${parsed.extractedIngredients.join(' ')}`,
+  const aiPayload = metadata.aiStructuredRecipe ?? null;
+  const parsed = mergeYoutubeParsedWithAi(
+    parseYoutubeMetadataIntoRecipe(metadata),
+    aiPayload,
+    metadata,
   );
+  const category = inferCategoryFromRecipeText(
+    `${parsed.extractedTitle} ${parsed.extractedIngredients.join(' ')}`,
+  );
+  const fullTranscript =
+    (metadata.transcriptText ?? '').trim() || (aiPayload?.notesAndTranscript ?? '').trim();
   return {
     title: parsed.extractedTitle,
     category,
     coverImageUri: metadata.thumbnailUrl,
     videoSourceUri: metadata.canonicalWatchUrl,
+    originalSourceUrl: metadata.canonicalWatchUrl,
     preparationMinutes: parsed.extractedMinutes,
     servingsCount: parsed.extractedServings,
     difficulty: parsed.extractedIngredients.length > 8 ? 'Médio' : 'Fácil',
     ingredients: parsed.extractedIngredients,
     preparationSteps: parsed.extractedSteps,
     unifiedChefNotesAndNutrition: parsed.extractedNotesAndNutrition,
+    videoTranscriptText: fullTranscript || undefined,
     tags: ['YouTube', category],
+  };
+}
+
+function mergeYoutubeParsedWithAi(
+  parsed: ParsedRecipeTextResult,
+  aiPayload: AiExtractedRecipePayload | null,
+  metadata: YoutubeRemoteVideoMetadata,
+): ParsedRecipeTextResult {
+  if (!aiPayload) return parsed;
+  const hasRealIngredients = !parsed.extractedIngredients[0]?.startsWith('Confira ');
+  const hasRealSteps = !parsed.extractedSteps[0]?.startsWith('Assista ao passo a passo');
+  const aiNotes = aiPayload.notesAndTranscript.trim();
+  const extraTranscript =
+    aiNotes && !metadata.transcriptText ? `🎙️ Transcrição Completa do Vídeo:\n${aiNotes}` : '';
+  const combinedNotes = [parsed.extractedNotesAndNutrition, extraTranscript]
+    .filter((item) => item.trim().length > 0)
+    .join('\n\n');
+  return {
+    extractedTitle:
+      aiPayload.title && (!metadata.title.trim() || metadata.title === 'Receita do YouTube')
+        ? aiPayload.title
+        : parsed.extractedTitle,
+    extractedIngredients:
+      !hasRealIngredients && aiPayload.ingredients.length > 0
+        ? aiPayload.ingredients
+        : parsed.extractedIngredients,
+    extractedSteps:
+      !hasRealSteps && aiPayload.preparationSteps.length > 0
+        ? aiPayload.preparationSteps
+        : parsed.extractedSteps,
+    extractedMinutes: aiPayload.preparationMinutes ?? parsed.extractedMinutes,
+    extractedServings: aiPayload.servingsCount ?? parsed.extractedServings,
+    extractedNotesAndNutrition: combinedNotes,
   };
 }
 

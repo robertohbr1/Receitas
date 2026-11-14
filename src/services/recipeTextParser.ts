@@ -1,10 +1,71 @@
 import { ParsedRecipeTextResult } from '../types/recipeTypes';
+import { sanitizeRecipeGroupHeadings } from './recipeGroupHeadings';
+import {
+  analyzeSectionHeaderLine,
+  hasLeadingListMarker,
+  looksLikeCookingInstructionSentence,
+  looksLikeIngredientLine,
+  looksLikeNutritionOrNoteLine,
+  looksLikeShortIngredientName,
+  looksLikeYieldOrTimeMetadataLine,
+  RecipeSectionHeaderMatch,
+  RecipeSectionKind,
+  stripLeadingBulletOrNumber,
+} from './recipeLineClassifier';
+import {
+  mergeWrappedIngredientLines,
+  mergeWrappedStepLines,
+  RecipeBucketEntry,
+  splitLongStepParagraphs,
+} from './recipeLineMerging';
+import {
+  extractPreparationMinutesFromText,
+  extractServingsFromText,
+} from './recipeYieldAndTimeExtractor';
 
-type ParserSectionMode = 'header' | 'ingredients' | 'steps' | 'notes';
+// Reexportações mantêm o contrato público histórico deste módulo.
+export {
+  detectSectionHeader,
+  looksLikeCookingInstructionSentence,
+  looksLikeIngredientLine,
+  stripLeadingBulletOrNumber,
+} from './recipeLineClassifier';
+export {
+  extractPreparationMinutesFromText,
+  extractServingsFromText,
+} from './recipeYieldAndTimeExtractor';
+
+type ParserSectionMode = 'header' | RecipeSectionKind;
+
+interface RecipeLineBuckets {
+  readonly ingredients: RecipeBucketEntry[];
+  readonly steps: RecipeBucketEntry[];
+  readonly notes: string[];
+}
+
+interface RecipeParserState {
+  section: ParserSectionMode;
+  lastFilledBucket: RecipeSectionKind | null;
+  hasSeenExplicitStepsHeader: boolean;
+  pendingIngredientsGroup: string | null;
+  pendingStepsGroup: string | null;
+  readonly buckets: RecipeLineBuckets;
+}
+
+/**
+ * Lista final separada em ingredientes, passos e notas (subtítulos de grupo terminam com ":").
+ */
+export interface SeparatedRecipeSections {
+  readonly ingredients: string[];
+  readonly steps: string[];
+  readonly notes: string[];
+}
+
+const FALLBACK_IMPORTED_TITLE = 'Receita Importada';
 
 /**
  * Analisa um texto colado de redes sociais, YouTube ou sites e separa automaticamente
- * título, ingredientes, modo de preparo, tempo, rendimento e notas/calorias.
+ * título, ingredientes (com subgrupos), modo de preparo, tempo, rendimento e notas/calorias.
  *
  * @example
  * const parsed = parseFreeformRecipeText('Bolo de Milho\nIngredientes:\n- 3 ovos\nModo de preparo:\n1. Bata tudo');
@@ -17,7 +78,16 @@ export function parseFreeformRecipeText(rawText: string): ParsedRecipeTextResult
       `Texto para importação está vazio. Recebido: "${rawText}". Esperado: texto contendo título, ingredientes ou passos.`,
     );
   }
-  return buildParsedRecipeFromLines(cleanLines, rawText);
+  const { title, bodyLines } = resolveTitleAndBodyLines(cleanLines);
+  const sections = separateRecipeSections(bodyLines);
+  return {
+    extractedTitle: title,
+    extractedIngredients: sections.ingredients,
+    extractedSteps: sections.steps,
+    extractedMinutes: extractPreparationMinutesFromText(rawText),
+    extractedServings: extractServingsFromText(rawText),
+    extractedNotesAndNutrition: sections.notes.join('\n'),
+  };
 }
 
 /**
@@ -34,175 +104,190 @@ export function splitIntoNonEmptyLines(rawText: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-function buildParsedRecipeFromLines(
-  lines: readonly string[],
-  fullText: string,
-): ParsedRecipeTextResult {
-  const extractedTitle = stripLeadingBulletOrNumber(lines[0]);
-  const buckets = categorizeRecipeLines(lines.slice(1));
-  return {
-    extractedTitle,
-    extractedIngredients: buckets.ingredients,
-    extractedSteps: buckets.steps,
-    extractedMinutes: extractPreparationMinutesFromText(fullText),
-    extractedServings: extractServingsFromText(fullText),
-    extractedNotesAndNutrition: buckets.notes.join('\n'),
-  };
+function resolveTitleAndBodyLines(lines: readonly string[]): {
+  title: string;
+  bodyLines: readonly string[];
+} {
+  const firstLineIsHeader = analyzeSectionHeaderLine(lines[0])?.section != null;
+  const candidateTitle = stripLeadingBulletOrNumber(lines[0]);
+  if (firstLineIsHeader || !candidateTitle) {
+    return { title: FALLBACK_IMPORTED_TITLE, bodyLines: lines };
+  }
+  return { title: candidateTitle, bodyLines: lines.slice(1) };
 }
 
-function categorizeRecipeLines(lines: readonly string[]): {
-  ingredients: string[];
-  steps: string[];
-  notes: string[];
-} {
-  let currentSection: ParserSectionMode = 'header';
-  const buckets = { ingredients: [] as string[], steps: [] as string[], notes: [] as string[] };
-  for (const line of lines) {
-    const detectedHeader = detectSectionHeader(line);
-    if (detectedHeader !== null) {
-      currentSection = detectedHeader;
-      continue;
-    }
-    if (currentSection === 'ingredients' && looksLikeCookingInstructionSentence(line)) {
-      currentSection = 'steps';
-    }
-    appendLineToBucket(line, currentSection, buckets);
+/**
+ * Classifica linhas (sem o título) em ingredientes, passos e notas usando cabeçalhos,
+ * subtítulos de grupo e heurísticas de verbo/quantidade.
+ *
+ * @example
+ * const sections = separateRecipeSections(['Massa:', '2 ovos', 'Cobertura:', '1 lata de leite condensado']);
+ * // sections.ingredients => ['Massa:', '2 ovos', 'Cobertura:', '1 lata de leite condensado']
+ */
+export function separateRecipeSections(lines: readonly string[]): SeparatedRecipeSections {
+  const state: RecipeParserState = {
+    section: 'header',
+    lastFilledBucket: null,
+    hasSeenExplicitStepsHeader: false,
+    pendingIngredientsGroup: null,
+    pendingStepsGroup: null,
+    buckets: { ingredients: [], steps: [], notes: [] },
+  };
+  for (const line of expandInlineBulletLines(lines)) {
+    consumeRecipeLine(line, state);
   }
+  return finalizeRecipeBuckets(state.buckets);
+}
+
+function expandInlineBulletLines(lines: readonly string[]): string[] {
+  return lines.flatMap((line) => {
+    if (!/^\s*[•▪◦]\s+\S/.test(line) || !/\s+[•▪◦]\s+\S/.test(line)) {
+      return [line];
+    }
+    return line
+      .split(/\s*(?=[•▪◦]\s+\S)/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+  });
+}
+
+function consumeRecipeLine(line: string, state: RecipeParserState): void {
+  const header = analyzeSectionHeaderLine(line);
+  if (header) {
+    applySectionHeader(header, line, state);
+    return;
+  }
+  if (looksLikeYieldOrTimeMetadataLine(line) || looksLikeNutritionOrNoteLine(line)) {
+    pushNote(stripLeadingBulletOrNumber(line), state);
+    return;
+  }
+  routeContentLine(line, state);
+}
+
+function applySectionHeader(
+  header: RecipeSectionHeaderMatch,
+  line: string,
+  state: RecipeParserState,
+): void {
+  if (header.section === 'notes') {
+    state.section = 'notes';
+    pushNote(stripLeadingBulletOrNumber(line), state);
+    return;
+  }
+  if (header.section === 'steps') state.hasSeenExplicitStepsHeader = true;
+  // Em receitas escritas por componente (Massa -> Recheio) sem "Modo de Preparo",
+  // um novo subtítulo de grupo reabre a coleta de ingredientes daquele componente.
+  const keepStepsMode = header.section === 'steps' || state.hasSeenExplicitStepsHeader;
+  state.section = header.section ?? (keepStepsMode ? 'steps' : 'ingredients');
+  updatePendingGroups(header, state);
+  if (header.inlineContent) consumeInlineSectionContent(header.inlineContent, state);
+}
+
+function updatePendingGroups(header: RecipeSectionHeaderMatch, state: RecipeParserState): void {
+  if (header.section === 'ingredients') {
+    state.pendingIngredientsGroup = header.groupTitle;
+    return;
+  }
+  if (header.section === 'steps') {
+    state.pendingStepsGroup = header.groupTitle;
+    return;
+  }
+  state.pendingIngredientsGroup = header.groupTitle;
+  state.pendingStepsGroup = header.groupTitle;
+}
+
+function consumeInlineSectionContent(inlineContent: string, state: RecipeParserState): void {
+  const isInstruction =
+    state.section === 'steps' || looksLikeCookingInstructionSentence(inlineContent);
+  const pieces = isInstruction
+    ? [inlineContent]
+    : inlineContent.split(/\s*;\s*|,\s+(?=\d)|\s+e\s+(?=\d)/);
+  for (const piece of pieces) {
+    if (piece.trim()) routeContentLine(piece.trim(), state);
+  }
+}
+
+function routeContentLine(line: string, state: RecipeParserState): void {
+  const entry: RecipeBucketEntry = {
+    text: stripLeadingBulletOrNumber(line),
+    hasListMarker: hasLeadingListMarker(line),
+  };
+  if (!entry.text) return;
+  if (state.section === 'header') {
+    routeUnsectionedLine(line, entry, state);
+    return;
+  }
+  if (state.section === 'ingredients') {
+    routeIngredientSectionLine(entry, state);
+    return;
+  }
+  if (state.section === 'notes') {
+    pushNote(entry.text, state);
+    return;
+  }
+  pushEntry('steps', entry, state);
+}
+
+function routeIngredientSectionLine(entry: RecipeBucketEntry, state: RecipeParserState): void {
+  if (!looksLikeCookingInstructionSentence(entry.text)) {
+    pushEntry('ingredients', entry, state);
+    return;
+  }
+  state.section = 'steps';
+  pushEntry('steps', entry, state);
+}
+
+function routeUnsectionedLine(
+  rawLine: string,
+  entry: RecipeBucketEntry,
+  state: RecipeParserState,
+): void {
+  const { buckets } = state;
+  const isStepContinuation =
+    state.lastFilledBucket === 'steps' && !entry.hasListMarker && /^[a-zà-ÿ]/.test(entry.text);
+  const isPromoExclamation = /!$/.test(entry.text) && buckets.steps.length === 0;
+  if (isStepContinuation || (!isPromoExclamation && looksLikeCookingInstructionSentence(entry.text))) {
+    pushEntry('steps', entry, state);
+    return;
+  }
+  const continuesIngredients =
+    buckets.ingredients.length > 0 && buckets.steps.length === 0 && looksLikeShortIngredientName(entry.text);
+  if (looksLikeIngredientLine(rawLine) || continuesIngredients) {
+    pushEntry('ingredients', entry, state);
+    return;
+  }
+  if (entry.hasListMarker && /^\s*\d/.test(rawLine)) pushEntry('steps', entry, state);
+  else pushNote(entry.text, state);
+}
+
+function pushEntry(
+  target: 'ingredients' | 'steps',
+  entry: RecipeBucketEntry,
+  state: RecipeParserState,
+): void {
+  const pending =
+    target === 'ingredients' ? state.pendingIngredientsGroup : state.pendingStepsGroup;
+  if (pending) {
+    state.buckets[target].push({ text: pending, hasListMarker: true });
+    if (target === 'ingredients') state.pendingIngredientsGroup = null;
+    else state.pendingStepsGroup = null;
+  }
+  state.buckets[target].push(entry);
+  state.lastFilledBucket = target;
+}
+
+function pushNote(noteText: string, state: RecipeParserState): void {
+  if (!noteText) return;
+  state.buckets.notes.push(noteText);
+  state.lastFilledBucket = 'notes';
+}
+
+function finalizeRecipeBuckets(buckets: RecipeLineBuckets): SeparatedRecipeSections {
+  const ingredients = mergeWrappedIngredientLines(buckets.ingredients).map((e) => e.text);
+  const steps = splitLongStepParagraphs(mergeWrappedStepLines(buckets.steps)).map((e) => e.text);
   return {
-    ingredients: buckets.ingredients,
-    steps: mergeWrappedContinuationLines(buckets.steps),
+    ingredients: sanitizeRecipeGroupHeadings(ingredients),
+    steps: sanitizeRecipeGroupHeadings(steps),
     notes: buckets.notes,
   };
-}
-
-function mergeWrappedContinuationLines(lines: readonly string[]): string[] {
-  const merged: string[] = [];
-  for (const line of lines) {
-    const startsLowercase = /^[a-zà-ÿ]/.test(line);
-    if (startsLowercase && merged.length > 0) {
-      merged[merged.length - 1] = `${merged[merged.length - 1]} ${line}`;
-      continue;
-    }
-    merged.push(line);
-  }
-  return merged;
-}
-
-function appendLineToBucket(
-  line: string,
-  section: ParserSectionMode,
-  buckets: { ingredients: string[]; steps: string[]; notes: string[] },
-): void {
-  const cleanedLine = stripLeadingBulletOrNumber(line);
-  if (!cleanedLine) return;
-  if (section === 'ingredients' && !looksLikeCookingInstructionSentence(cleanedLine)) {
-    buckets.ingredients.push(cleanedLine);
-    return;
-  }
-  if (section === 'header' && looksLikeIngredientLine(line)) {
-    buckets.ingredients.push(cleanedLine);
-    return;
-  }
-  if (section === 'notes' || looksLikeNutritionOrNoteLine(line)) {
-    buckets.notes.push(cleanedLine);
-    return;
-  }
-  buckets.steps.push(cleanedLine);
-}
-
-/**
- * Identifica se uma linha começa com verbo de instrução culinária (preparo) ou é longa demais para ser apenas um ingrediente.
- *
- * @example
- * const isStep = looksLikeCookingInstructionSentence('Derrete 250g de chocolate no microondas');
- * // isStep === true
- */
-export function looksLikeCookingInstructionSentence(cleanedLine: string): boolean {
-  const normalized = cleanedLine.toLowerCase().trim();
-  return /^(derret[ae]|mistur[ae]|bat[ae]|ass[ae]|lev[ae]|adicione|acrescente|coloque|despeje|refogue|cozinhe|frite|mexa|reserve|sirva|deixe|modele|unte)\b/.test(
-    normalized,
-  );
-}
-
-/**
- * Detecta se uma linha é um cabeçalho de seção (ingredientes, preparo ou notas/nutrição).
- *
- * @example
- * const section = detectSectionHeader('Modo de Preparo:');
- * // section === 'steps'
- */
-export function detectSectionHeader(line: string): ParserSectionMode | null {
-  const normalized = line.toLowerCase().replace(/[:\-*#🎬📝🛒👩‍🍳]/g, '').trim();
-  if (normalized.length > 42) return null;
-  if (/^(ingredientes?(\s+d[aeo]s?\s+\w+)?|o que voc[eê] vai precisar|massa|calda|recheio|cobertura)$/.test(normalized)) {
-    return 'ingredients';
-  }
-  if (/^(modo de preparo|modo de fazer|como fazer|preparo|passo a passo|instru[cç][oõ]es)$/.test(normalized)) {
-    return 'steps';
-  }
-  if (/^(dicas?|notas?|observa[cç][oõ]es|informa[cç][aã]o nutricional|calorias|nutri[cç][aã]o)$/.test(normalized)) {
-    return 'notes';
-  }
-  return null;
-}
-
-/**
- * Estima se uma linha avulsa possui formato típico de ingrediente culinário.
- *
- * @example
- * const isIng = looksLikeIngredientLine('2 colheres de sopa de manteiga');
- * // isIng === true
- */
-export function looksLikeIngredientLine(line: string): boolean {
-  const startsWithBullet = /^[-•*]\s+/.test(line);
-  const hasMeasurementUnit =
-    /\b(\d+\s*(g|kg|ml|l|litros?|x[ií]caras?|colher(?:es)?|pitadas?|dentes?|unidades?|pacotes?|latas?|caixinhas?|ovos?|cebolas?|cenouras?)|a gosto|meia x[ií]cara)\b/i.test(
-      line,
-    );
-  return startsWithBullet || (hasMeasurementUnit && line.length < 95);
-}
-
-function looksLikeNutritionOrNoteLine(line: string): boolean {
-  return /\b(kcal|calorias|prote[ií]nas?|carboidratos?|dica\s*:|obs\s*:|nota\s*:)/i.test(line);
-}
-
-/**
- * Remove marcadores de lista ou numeração inicial de uma linha de texto.
- *
- * @example
- * const clean = stripLeadingBulletOrNumber('1. Misture bem os ovos');
- * // clean === 'Misture bem os ovos'
- */
-export function stripLeadingBulletOrNumber(line: string): string {
-  return line.replace(/^([-•*]|\d+[.)])\s*/, '').trim();
-}
-
-/**
- * Extrai o tempo de preparo em minutos a partir de menções textuais (ex: "40 min").
- *
- * @example
- * const mins = extractPreparationMinutesFromText('Tempo de forno: 45 minutos');
- * // mins === 45
- */
-export function extractPreparationMinutesFromText(text: string): number {
-  const match = text.match(/(\d{1,3})\s*(?:min(?:uto)?s?)\b/i);
-  if (match && match[1]) {
-    return Math.max(1, parseInt(match[1], 10));
-  }
-  return 30;
-}
-
-/**
- * Extrai a quantidade de porções a partir de menções textuais (ex: "Rende 6 porções").
- *
- * @example
- * const servings = extractServingsFromText('Rendimento: 8 porções');
- * // servings === 8
- */
-export function extractServingsFromText(text: string): number {
-  const match = text.match(/(\d{1,2})\s*(?:por[cç][oõ]es|pessoas|fatias|unidades)\b/i);
-  if (match && match[1]) {
-    return Math.max(1, parseInt(match[1], 10));
-  }
-  return 4;
 }
